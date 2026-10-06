@@ -22,45 +22,52 @@ object Dates {
         """(?<![\dA-Za-z])(\d{1,2})[\s.]+(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)(?![A-Za-z])\.?(?:[\s.]*(\d{4}))?""",
     )
     private val numericDate = Regex("""(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4})(?![\d])""")
-    private val year = Regex("""(?<!\d)(19[0-4]\d|190\d)(?!\d)""")
+    private val year = Regex("""(?<!\d)(1[6-9]\d\d)(?!\d)""")
 
-    /** Ищет дату в произвольной строке. Римские месяцы понимает только при [allowRoman]. */
-    fun find(s: String, allowRoman: Boolean = true): DateInfo {
+    /** Годы, которые считаем годами написания (по умолчанию — Цветаевой). */
+    val DEFAULT_YEARS = 1890..1941
+
+    private fun findYear(s: String, years: IntRange): Int? =
+        year.findAll(s).map { it.value.toInt() }.firstOrNull { it in years }
+
+    /**
+     * Ищет дату в произвольной строке. Римские месяцы понимает только при [allowRoman].
+     * [years] — годы жизни автора: остальные четырёхзначные числа годом не считаются.
+     */
+    fun find(s: String, allowRoman: Boolean = true, years: IntRange = DEFAULT_YEARS): DateInfo {
         wordDate.find(s)?.let { m ->
             val day = m.groupValues[1].toInt()
             val word = m.groupValues[2].lowercase().removeSuffix(".")
             var month = MONTHS_GEN.indexOf(word) + 1
             if (month == 0) month = MONTHS_SHORT.indexOf(word) + 1
-            val y = m.groupValues[3].toIntOrNull()?.takeIf { it in 1890..1941 }
-                ?: year.find(s)?.value?.toInt()
+            val y = m.groupValues[3].toIntOrNull()?.takeIf { it in years } ?: findYear(s, years)
             if (month in 1..12 && valid(day, month)) return DateInfo(day, month, y)
         }
         numericDate.find(s)?.let { m ->
             val day = m.groupValues[1].toInt()
             val month = m.groupValues[2].toInt()
             val y = m.groupValues[3].toInt()
-            if (y in 1890..1941 && month in 1..12 && valid(day, month)) return DateInfo(day, month, y)
+            if (y in years && month in 1..12 && valid(day, month)) return DateInfo(day, month, y)
         }
         if (allowRoman) {
             romanDate.find(s)?.let { m ->
                 val day = m.groupValues[1].toInt()
                 val month = ROMAN.indexOf(m.groupValues[2]) + 1
-                val y = m.groupValues[3].toIntOrNull()?.takeIf { it in 1890..1941 }
-                    ?: year.find(s)?.value?.toInt()
+                val y = m.groupValues[3].toIntOrNull()?.takeIf { it in years } ?: findYear(s, years)
                 if (month in 1..12 && valid(day, month)) return DateInfo(day, month, y)
             }
         }
-        return DateInfo(null, null, year.find(s)?.value?.toInt())
+        return DateInfo(null, null, findYear(s, years))
     }
 
     /**
      * Похожа ли строка на подпись под стихом: дата (и, возможно, место), без лишнего текста.
      * Например: «Москва, 6 октября 1915», «1916», «<1922>», «Коктебель, 11 мая 1911 г.»
      */
-    fun isDateLine(line: String): Boolean {
+    fun isDateLine(line: String, years: IntRange = DEFAULT_YEARS): Boolean {
         val t = line.trim()
         if (t.isEmpty() || t.length > 70) return false
-        val d = find(t, allowRoman = true)
+        val d = find(t, allowRoman = true, years = years)
         if (d.isEmpty) return false
         // Убираем всё «датное» и смотрим, что осталось: допустимо до трёх коротких слов (место).
         val rest = t

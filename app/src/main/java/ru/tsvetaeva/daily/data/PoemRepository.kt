@@ -5,8 +5,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import ru.tsvetaeva.daily.core.Author
 import ru.tsvetaeva.daily.core.DateInfo
 import ru.tsvetaeva.daily.core.Dates
+import ru.tsvetaeva.daily.core.Dedupe
 import ru.tsvetaeva.daily.core.HtmlToWiki
 import ru.tsvetaeva.daily.core.Poem
 import ru.tsvetaeva.daily.core.PoemPicker
@@ -15,15 +17,15 @@ import java.time.LocalDate
 import kotlin.random.Random
 
 /**
- * Собирает все стихотворения Цветаевой с ru.wikisource.org, хранит их офлайн
+ * Собирает все стихотворения автора с ru.wikisource.org, хранит их офлайн
  * и выбирает «стих дня».
  */
-class PoemRepository private constructor(context: Context) {
+class PoemRepository private constructor(context: Context, val author: Author) {
 
-    private val store = PoemStore(context)
+    private val store = PoemStore(context, author)
     val prefs = Prefs(context)
+    private val state = AuthorPrefs(context, author)
     private val api = WikiApi()
-    private val mutex = Mutex()
 
     @Volatile private var cache: List<Poem>? = null
 
@@ -33,18 +35,29 @@ class PoemRepository private constructor(context: Context) {
         store.load().also { cache = it }
     }
 
+    /** База уже собиралась (хотя бы раз). */
+    fun hasData(): Boolean = cache?.isNotEmpty() ?: store.exists()
+
+    val lastRefreshMillis: Long get() = state.lastRefreshMillis
+
     fun needsRefresh(): Boolean =
-        System.currentTimeMillis() - prefs.lastRefreshMillis > REFRESH_INTERVAL_MS
+        System.currentTimeMillis() - state.lastRefreshMillis > REFRESH_INTERVAL_MS
 
     /**
      * Обходит Викитеку: оглавления → страницы стихов и циклов → подстраницы.
-     * Берутся только страницы, в названии которых указан автор «(Цветаева)».
+     * Берутся только страницы, в названии которых указан автор: «(Цветаева)», «(Пушкин)»…
+     * Одновременно идёт только один обход — чтобы не перегружать Викитеку;
+     * [onQueued] вызывается, если приходится ждать обхода другого автора.
      */
     suspend fun refresh(
         onProgress: (pages: Int, poems: Int) -> Unit = { _, _ -> },
         onWait: (seconds: Int) -> Unit = {},
-    ): Int =
-        mutex.withLock {
+        onQueued: () -> Unit = {},
+    ): Int {
+        val queued = crawlMutex.isLocked
+        if (queued) onQueued()
+        return crawlMutex.withLock {
+            if (queued) onProgress(0, 0)
             withContext(Dispatchers.IO) {
                 api.onWait = onWait
                 val queue = ArrayDeque<String>()
@@ -53,10 +66,10 @@ class PoemRepository private constructor(context: Context) {
                 val found = LinkedHashMap<String, Poem>()
 
                 fun enqueue(t: String) { if (seen.add(t)) queue.addLast(t) }
-                SEED_PAGES.forEach(::enqueue)
-                for (cat in SEED_CATEGORIES) {
+                author.seedPages.forEach(::enqueue)
+                for (cat in author.seedCategories) {
                     runCatching { api.categoryMembers(cat) }.getOrDefault(emptyList())
-                        .filter(WikiParser::isRelevantTitle).forEach(::enqueue)
+                        .filter(author::isRelevantTitle).forEach(::enqueue)
                 }
 
                 var pagesDone = 0
@@ -68,18 +81,18 @@ class PoemRepository private constructor(context: Context) {
                     val pages = api.fetchContents(batch)
                     for (page in pages) {
                         seen += page.title // перенаправления: итоговое название тоже считаем посещённым
-                        var parsed = WikiParser.parse(page.title, page.wikitext, hints[page.title])
+                        var parsed = WikiParser.parse(page.title, page.wikitext, hints[page.title], author)
                         if (parsed.poems.isEmpty() && !parsed.isProse && PAGES_TAG.containsMatchIn(page.wikitext)) {
                             // Текст включён из страниц скана — берём отрисованный HTML.
                             val html = runCatching { api.parseHtml(page.title) }.getOrNull()
                             if (html != null) {
-                                val fromHtml = WikiParser.parse(page.title, HtmlToWiki.convert(html), hints[page.title])
+                                val fromHtml = WikiParser.parse(page.title, HtmlToWiki.convert(html), hints[page.title], author)
                                 parsed = fromHtml.copy(links = parsed.links + fromHtml.links)
                             }
                         }
                         hints.putAll(parsed.dateHints)
                         for (p in parsed.poems) found[p.id] = p
-                        if (!parsed.isProse) parsed.links.filter(WikiParser::isRelevantTitle).forEach(::enqueue)
+                        if (!parsed.isProse) parsed.links.filter(author::isRelevantTitle).forEach(::enqueue)
                     }
                     pagesDone += batch.size
                     onProgress(pagesDone, found.size)
@@ -108,30 +121,31 @@ class PoemRepository private constructor(context: Context) {
                     withHints.forEach { byId[it.id] = it }
                     byId.values.toList()
                 }
-                val result = dedupe(merged).sortedWith(compareBy({ it.year ?: 9999 }, { it.month ?: 13 }, { it.day ?: 32 }))
+                val result = Dedupe.dedupe(merged).sortedWith(compareBy({ it.year ?: 9999 }, { it.month ?: 13 }, { it.day ?: 32 }))
                 if (result.size < MIN_POEMS) {
                     throw interrupted
                         ?: IllegalStateException("С Викитеки получено слишком мало стихов (${result.size}). Попробуйте позже.")
                 }
                 store.save(result)
                 cache = result
-                prefs.lastRefreshMillis = if (interrupted == null) System.currentTimeMillis()
+                state.lastRefreshMillis = if (interrupted == null) System.currentTimeMillis()
                 // Неполная база: попробуем дособрать через несколько часов.
                 else System.currentTimeMillis() - REFRESH_INTERVAL_MS + RETRY_PARTIAL_MS
                 result.size
             }
         }
+    }
 
     /** Стихотворение на сегодня (одно и то же весь день, пока не нажать «Другое»). */
     suspend fun today(date: LocalDate = LocalDate.now()): Today? {
         val all = poems()
         if (all.isEmpty()) return null
         val epoch = date.toEpochDay()
-        if (prefs.todayEpochDay == epoch) {
-            all.firstOrNull { it.id == prefs.todayId }?.let { return Today(it, distanceFor(it, date), all.size) }
+        if (state.todayEpochDay == epoch) {
+            all.firstOrNull { it.id == state.todayId }?.let { return Today(it, distanceFor(it, date), all.size) }
         }
         val pick = PoemPicker.pick(
-            all, date, prefs.recent.toSet(), prefs.nearDate, PoemPicker.randomForDay(date),
+            all, date, state.recent.toSet(), prefs.nearDate, PoemPicker.randomForDay(date, salt = author.ordinal),
         ) ?: return null
         remember(pick.poem, epoch, all.size)
         return Today(pick.poem, distanceFor(pick.poem, date), all.size)
@@ -142,7 +156,7 @@ class PoemRepository private constructor(context: Context) {
         val all = poems()
         if (all.isEmpty()) return null
         val pick = PoemPicker.pick(
-            all, date, prefs.recent.toSet(), prefs.nearDate, Random.Default, exclude = prefs.todayId,
+            all, date, state.recent.toSet(), prefs.nearDate, Random.Default, exclude = state.todayId,
         ) ?: return null
         remember(pick.poem, date.toEpochDay(), all.size)
         return Today(pick.poem, distanceFor(pick.poem, date), all.size)
@@ -150,59 +164,32 @@ class PoemRepository private constructor(context: Context) {
 
     /** Сбросить выбор на сегодня (например, после смены режима). */
     fun resetToday() {
-        prefs.todayEpochDay = Long.MIN_VALUE
+        state.todayEpochDay = Long.MIN_VALUE
     }
 
     private fun remember(poem: Poem, epoch: Long, total: Int) {
-        prefs.todayEpochDay = epoch
-        prefs.todayId = poem.id
-        prefs.addRecent(poem.id, max = (total / 2).coerceIn(1, 120))
+        state.todayEpochDay = epoch
+        state.todayId = poem.id
+        state.addRecent(poem.id, max = (total / 2).coerceIn(1, 120))
     }
 
     private fun distanceFor(p: Poem, date: LocalDate): Int? =
         if (p.hasDayMonth) Dates.distance(p.month!!, p.day!!, date.monthValue, date.dayOfMonth) else null
 
-    /** Одно и то же стихотворение может лежать и на отдельной странице, и внутри сборника. */
-    private fun dedupe(poems: List<Poem>): List<Poem> {
-        val byKey = LinkedHashMap<String, Poem>()
-        for (p in poems) {
-            val key = p.text.lowercase().filter { it.isLetter() }.take(120)
-            val prev = byKey[key]
-            byKey[key] = when {
-                prev == null -> p
-                score(p) > score(prev) -> p
-                else -> prev
-            }
-        }
-        return byKey.values.toList()
-    }
-
-    private fun score(p: Poem): Int =
-        (if (p.hasDayMonth) 4 else 0) + (if (p.year != null) 2 else 0) + (if (p.id == p.pageTitle) 1 else 0)
-
     companion object {
         const val REFRESH_INTERVAL_MS = 7L * 24 * 60 * 60 * 1000
         private const val RETRY_PARTIAL_MS = 3L * 60 * 60 * 1000
         private const val MAX_PAGES = 4000
-        private const val MIN_POEMS = 20
+        private const val MIN_POEMS = 10
         private val PAGES_TAG = Regex("""<pages\s""", RegexOption.IGNORE_CASE)
 
-        val SEED_PAGES = listOf(
-            "Стихотворения 1906—1920 (Цветаева)",
-            "Стихотворения 1921—1941 (Цветаева)",
-            "Марина Ивановна Цветаева",
-            "Автор:Марина Ивановна Цветаева",
-        )
-        val SEED_CATEGORIES = listOf(
-            "Категория:Марина Ивановна Цветаева",
-            "Категория:Поэзия Марины Ивановны Цветаевой",
-            "Категория:Стихотворения Марины Ивановны Цветаевой",
-        )
+        /** Общий на всех авторов: обходы Викитеки идут по очереди. */
+        private val crawlMutex = Mutex()
 
-        @Volatile private var instance: PoemRepository? = null
-        fun get(context: Context): PoemRepository =
-            instance ?: synchronized(this) {
-                instance ?: PoemRepository(context.applicationContext).also { instance = it }
+        private val instances = HashMap<Author, PoemRepository>()
+        fun get(context: Context, author: Author): PoemRepository =
+            synchronized(instances) {
+                instances.getOrPut(author) { PoemRepository(context.applicationContext, author) }
             }
     }
 }

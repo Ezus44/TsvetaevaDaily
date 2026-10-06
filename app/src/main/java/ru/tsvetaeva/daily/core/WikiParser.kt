@@ -29,7 +29,10 @@ object WikiParser {
     private val boldLineRe = Regex("""(?m)^\s*'''(.+?)'''\s*$""")
     private val centerRe = Regex("""<center>([\s\S]*?)</center>""", RegexOption.IGNORE_CASE)
     private val createdRe = Regex("""ДАТАСОЗДАНИЯ\s*=\s*([^|\n}]*)""")
-    private val authorParenRe = Regex("""\s*\([^()]*Цветаев[^()]*\)""")
+    private val authorParenRe =
+        Regex("""\s*\([^()]*(?:${Author.entries.joinToString("|") { it.stem }})[^()]*\)""")
+    /** Подстраницы с изданиями одного текста: «Пророк (Пушкин)/ПСС 1959—1962 (ВТ)», «…/ДО». */
+    private val editionRe = Regex("""(?:ДО|ВТ|(?:ПСС|СС|Изд\.?|Собрание сочинений)(?:\s.*)?|.*\((?:ДО|ВТ)\))""")
 
     private val skipNamespaces = setOf(
         "категория", "category", "файл", "file", "изображение", "image", "автор", "author",
@@ -39,15 +42,20 @@ object WikiParser {
         "commons", "wikipedia", "википедия", "викитека",
     )
 
-    fun isRelevantTitle(title: String): Boolean =
-        title.contains("(Цветаева") || title.contains("Цветаева)")
+    fun isRelevantTitle(title: String, author: Author = Author.TSVETAEVA): Boolean = author.isRelevantTitle(title)
 
     /** [externalHint] — дата, найденная для этой страницы в оглавлении (если есть). */
-    fun parse(pageTitle: String, wikitext: String, externalHint: DateInfo? = null): ParsedPage {
+    fun parse(
+        pageTitle: String,
+        wikitext: String,
+        externalHint: DateInfo? = null,
+        author: Author = Author.TSVETAEVA,
+    ): ParsedPage {
+        val years = author.years
         val raw = commentRe.replace(wikitext, "")
         val links = extractLinks(pageTitle, raw)
-        val hints = extractDateHints(pageTitle, raw)
-        val pageDate = createdRe.find(raw)?.groupValues?.get(1)?.let { Dates.find(it, allowRoman = false) }
+        val hints = extractDateHints(pageTitle, raw, author)
+        val pageDate = createdRe.find(raw)?.groupValues?.get(1)?.let { Dates.find(it, allowRoman = false, years = years) }
 
         val blocks = poemRe.findAll(raw).toList()
         if (blocks.isEmpty()) return ParsedPage(emptyList(), links, hints, isProse = false)
@@ -73,18 +81,18 @@ object WikiParser {
 
             // Подпись с датой в конце блока.
             val meta = ArrayList<String>()
-            while (lines.isNotEmpty() && meta.size < 3 && Dates.isDateLine(lines.last())) {
+            while (lines.isNotEmpty() && meta.size < 3 && Dates.isDateLine(lines.last(), years)) {
                 meta.add(0, lines.removeAt(lines.lastIndex).trim())
                 trimBlank(lines)
             }
             // …или сразу после блока: {{poem-off|дата}} либо отдельная строка.
             if (meta.isEmpty()) {
                 val off = poemOffRe.find(after)?.groupValues?.get(1)?.let { clean(lastArg(it)).trim() }
-                if (!off.isNullOrEmpty() && !Dates.find(off).isEmpty) {
+                if (!off.isNullOrEmpty() && !Dates.find(off, years = years).isEmpty) {
                     meta.add(off)
                 } else {
                     clean(after).lines().map { it.trim() }.filter { it.isNotEmpty() }.take(2)
-                        .takeWhile { Dates.isDateLine(it) }.forEach { meta.add(it) }
+                        .takeWhile { Dates.isDateLine(it, years) }.forEach { meta.add(it) }
                 }
             }
 
@@ -101,7 +109,7 @@ object WikiParser {
             }
 
             val metaText = meta.joinToString(", ").ifBlank { null }
-            var date = metaText?.let { Dates.find(it) } ?: DateInfo(null, null, null)
+            var date = metaText?.let { Dates.find(it, years = years) } ?: DateInfo(null, null, null)
             date = date.orElse(externalHint)
             if (blocks.size == 1 || date.year == null) date = date.orElse(pageDate)
 
@@ -136,19 +144,19 @@ object WikiParser {
         linkRe.findAll(raw).mapNotNull { resolveLink(pageTitle, it.groupValues[1]) }
             .filter { it != pageTitle }.distinct().toList()
 
-    private fun extractDateHints(pageTitle: String, raw: String): Map<String, DateInfo> {
+    private fun extractDateHints(pageTitle: String, raw: String, author: Author): Map<String, DateInfo> {
         val hints = HashMap<String, DateInfo>()
         var sectionYear: Int? = null
         for (line in raw.lines()) {
             headingRe.matchEntire(line.trim())?.let { h ->
-                sectionYear = Dates.find(h.groupValues[2], allowRoman = false).year ?: sectionYear
+                sectionYear = Dates.find(h.groupValues[2], allowRoman = false, years = author.years).year ?: sectionYear
                 return@let
             }
             val first = linkRe.find(line) ?: continue
             val target = resolveLink(pageTitle, first.groupValues[1]) ?: continue
-            if (!isRelevantTitle(target)) continue
+            if (!author.isRelevantTitle(target)) continue
             val rest = clean(linkRe.replace(line, " "))
-            val d = Dates.find(rest, allowRoman = false)
+            val d = Dates.find(rest, allowRoman = false, years = author.years)
             val withYear = if (d.year == null && sectionYear != null) DateInfo(d.day, d.month, sectionYear) else d
             if (!withYear.isEmpty) hints[target] = withYear
         }
@@ -169,6 +177,8 @@ object WikiParser {
         return t.ifEmpty { null }
     }
 
+    fun isEdition(part: String): Boolean = editionRe.matches(part.trim())
+
     private fun isUntitled(t: String): Boolean = t.replace(Regex("[\\s*⁂✱∗.·]"), "").isEmpty()
 
     private fun isNumber(t: String): Boolean = t.trim().trimEnd('.').matches(Regex("\\d{1,3}|[IVXLC]{1,7}"))
@@ -180,9 +190,14 @@ object WikiParser {
         return "«$cut$end…»"
     }
 
-    /** «Стихи к Блоку (Цветаева)/3» → «Стихи к Блоку — 3»; «Сборник (Цветаева)/Встреча» → «Встреча». */
+    /**
+     * «Стихи к Блоку (Цветаева)/3» → «Стихи к Блоку — 3»; «Сборник (Цветаева)/Встреча» → «Встреча»;
+     * «Анчар (Пушкин)/ПСС 1959—1962 (ВТ)» → «Анчар».
+     */
     fun displayTitle(pageTitle: String): String {
-        val parts = pageTitle.split('/').map { authorParenRe.replace(it, "").trim() }.filter { it.isNotEmpty() }
+        val split = pageTitle.split('/').map { it.trim() }
+        val parts = split.filterIndexed { i, it -> i == 0 || !isEdition(it) }
+            .map { authorParenRe.replace(it, "").trim() }.filter { it.isNotEmpty() }
         if (parts.isEmpty()) return pageTitle
         val last = parts.last()
         return if (parts.size > 1 && isNumber(last)) "${parts[parts.size - 2]} — $last" else last

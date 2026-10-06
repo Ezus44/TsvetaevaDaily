@@ -7,11 +7,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import ru.tsvetaeva.daily.core.Author
 import ru.tsvetaeva.daily.data.PoemRepository
+import ru.tsvetaeva.daily.data.Prefs
 import ru.tsvetaeva.daily.notify.DailyNotifications
 import java.time.LocalDate
 
-data class UiState(
+/** Состояние вкладки одного автора. */
+data class AuthorUi(
     val date: LocalDate = LocalDate.now(),
     val today: PoemRepository.Today? = null,
     /** Первая загрузка базы — показываем прогресс вместо стиха. */
@@ -21,83 +24,122 @@ data class UiState(
     /** Фоновое обновление базы (стих уже на экране). */
     val refreshing: Boolean = false,
     val refreshMessage: String? = null,
+    val lastRefreshMillis: Long = 0,
+)
+
+data class UiState(
+    /** Открытая вкладка. */
+    val selected: Author = Author.TSVETAEVA,
+    /** Основной автор: открывается при запуске и приходит в уведомлении. */
+    val main: Author = Author.TSVETAEVA,
+    val authors: Map<Author, AuthorUi> = emptyMap(),
     val nearDate: Boolean = true,
     val notifyEnabled: Boolean = true,
     val notifyHour: Int = 9,
     val notifyMinute: Int = 0,
-    val lastRefreshMillis: Long = 0,
-)
+) {
+    fun of(author: Author): AuthorUi = authors[author] ?: AuthorUi()
+    val current: AuthorUi get() = of(selected)
+}
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
-    private val repo = PoemRepository.get(app)
-    private val prefs = repo.prefs
-    private val _state = MutableStateFlow(settingsState(UiState()))
+    private val prefs = Prefs(app)
+    private val _state = MutableStateFlow(settingsState(UiState(selected = prefs.mainAuthor)))
     val state: StateFlow<UiState> = _state
 
+    /** Авторы, чьи вкладки уже открывались: их стих дня держим актуальным. */
+    private val opened = LinkedHashSet<Author>()
+
     init {
-        load()
+        select(prefs.mainAuthor)
     }
 
+    private fun repo(a: Author) = PoemRepository.get(getApplication(), a)
+
     private fun settingsState(s: UiState) = s.copy(
+        main = prefs.mainAuthor,
         nearDate = prefs.nearDate,
         notifyEnabled = prefs.notifyEnabled,
         notifyHour = prefs.notifyHour,
         notifyMinute = prefs.notifyMinute,
-        lastRefreshMillis = prefs.lastRefreshMillis,
     )
 
-    private fun load() = viewModelScope.launch {
+    private fun updateAuthor(a: Author, f: (AuthorUi) -> AuthorUi) =
+        _state.update { it.copy(authors = it.authors + (a to f(it.of(a)))) }
+
+    /** Переключение вкладки: база автора собирается при первом открытии. */
+    fun select(a: Author) {
+        _state.update { it.copy(selected = a) }
+        if (opened.add(a)) load(a)
+    }
+
+    private fun load(a: Author) = viewModelScope.launch {
         val date = LocalDate.now()
+        val repo = repo(a)
         val t = repo.today(date)
         if (t != null) {
-            _state.update { it.copy(date = date, today = t, loading = false, error = null) }
-            if (repo.needsRefresh()) refresh(silent = true)
+            updateAuthor(a) {
+                it.copy(date = date, today = t, loading = false, error = null, lastRefreshMillis = repo.lastRefreshMillis)
+            }
+            if (repo.needsRefresh()) refresh(a, silent = true)
         } else {
-            refresh(silent = false)
+            refresh(a, silent = false)
         }
     }
 
     /** Вызывается при возвращении в приложение: если наступил новый день — новый стих. */
     fun onResume() {
-        if (_state.value.date != LocalDate.now() && !_state.value.loading) load()
+        val now = LocalDate.now()
+        for (a in opened) {
+            val ui = _state.value.of(a)
+            if (ui.date != now && !ui.loading) load(a)
+        }
     }
 
-    fun retry() = load()
+    fun retry(a: Author) = load(a)
 
-    fun another() = viewModelScope.launch {
-        repo.another()?.let { t -> _state.update { it.copy(today = t, date = LocalDate.now()) } }
+    fun another(a: Author) = viewModelScope.launch {
+        repo(a).another()?.let { t -> updateAuthor(a) { it.copy(today = t, date = LocalDate.now()) } }
     }
 
-    fun refresh(silent: Boolean) = viewModelScope.launch {
-        if (_state.value.refreshing || _state.value.loading) return@launch
-        _state.update {
+    fun refreshCurrent() = refresh(_state.value.selected, silent = false)
+
+    private fun refresh(a: Author, silent: Boolean) = viewModelScope.launch {
+        val ui = _state.value.of(a)
+        if (ui.refreshing || ui.loading) return@launch
+        updateAuthor(a) {
             if (silent) it.copy(refreshing = true, refreshMessage = null)
             else it.copy(loading = it.today == null, refreshing = it.today != null, error = null,
                 progress = "Собираю стихи с Викитеки…", refreshMessage = null)
         }
+        val repo = repo(a)
         try {
             var counts = ""
             val count = repo.refresh(
                 onProgress = { pages, poems ->
                     counts = "Просмотрено страниц: $pages\nНайдено стихотворений: $poems"
-                    _state.update { it.copy(progress = counts) }
+                    updateAuthor(a) { it.copy(progress = counts) }
                 },
                 onWait = { sec ->
-                    _state.update {
+                    updateAuthor(a) {
                         it.copy(progress = listOf(counts, "Викитека просит не торопиться — жду $sec с…")
                             .filter { l -> l.isNotEmpty() }.joinToString("\n"))
                     }
                 },
+                onQueued = {
+                    updateAuthor(a) { it.copy(progress = "Жду, пока соберутся стихи другого автора…") }
+                },
             )
-            val t = _state.value.today ?: repo.today()
-            _state.update {
-                settingsState(it).copy(
-                    today = t, loading = false, refreshing = false, progress = null, error = null,
+            val t = _state.value.of(a).today ?: repo.today()
+            updateAuthor(a) {
+                it.copy(
+                    date = LocalDate.now(), today = t, loading = false, refreshing = false, progress = null, error = null,
+                    lastRefreshMillis = repo.lastRefreshMillis,
                     refreshMessage = if (silent) null else "База обновлена: $count стихотворений",
                 )
             }
         } catch (e: Exception) {
-            _state.update {
+            updateAuthor(a) {
                 if (it.today == null) it.copy(loading = false, refreshing = false, error = errorText(e))
                 else it.copy(loading = false, refreshing = false,
                     refreshMessage = if (silent) null else "Не удалось обновить: ${errorText(e)}")
@@ -105,13 +147,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun clearMessage() = _state.update { it.copy(refreshMessage = null) }
+    fun clearMessage() = updateAuthor(_state.value.selected) { it.copy(refreshMessage = null) }
+
+    fun setMain(a: Author) {
+        prefs.mainAuthor = a
+        _state.update { settingsState(it) }
+    }
 
     fun setNearDate(v: Boolean) = viewModelScope.launch {
         prefs.nearDate = v
-        repo.resetToday()
-        val t = repo.today()
-        _state.update { settingsState(it).copy(today = t ?: it.today) }
+        _state.update { settingsState(it) }
+        for (a in opened) {
+            val repo = repo(a)
+            repo.resetToday()
+            val t = repo.today()
+            updateAuthor(a) { it.copy(today = t ?: it.today) }
+        }
     }
 
     fun setNotify(enabled: Boolean) {

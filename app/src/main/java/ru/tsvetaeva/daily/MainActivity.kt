@@ -32,6 +32,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -48,8 +51,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -58,7 +64,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -67,13 +75,16 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import ru.tsvetaeva.daily.core.Author
 import ru.tsvetaeva.daily.core.Dates
 import ru.tsvetaeva.daily.core.Poem
 import ru.tsvetaeva.daily.core.WikiParser
-import ru.tsvetaeva.daily.data.PoemRepository
+import ru.tsvetaeva.daily.data.Prefs
 import ru.tsvetaeva.daily.notify.DailyNotifications
 import ru.tsvetaeva.daily.ui.TsvetaevaTheme
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -92,7 +103,7 @@ class MainActivity : ComponentActivity() {
             TsvetaevaTheme {
                 val state by vm.state.collectAsState()
                 val context = LocalContext.current
-                val prefs = remember { PoemRepository.get(context).prefs }
+                val prefs = remember { Prefs(context) }
 
                 val permissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
@@ -106,30 +117,30 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 // Один раз после первой загрузки предложим включить уведомления.
-                LaunchedEffect(state.today != null) {
-                    if (state.today != null && state.notifyEnabled) askPermissionIfNeeded(force = false)
+                val anyLoaded = state.authors.values.any { it.today != null }
+                LaunchedEffect(anyLoaded) {
+                    if (anyLoaded && state.notifyEnabled) askPermissionIfNeeded(force = false)
                 }
 
                 var showSettings by remember { mutableStateOf(false) }
 
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    when {
-                        state.today != null -> PoemScreen(
-                            state = state,
-                            onAnother = vm::another,
-                            onShare = { share(state.today!!.poem) },
-                            onOpenWiki = { openWiki(state.today!!.poem) },
-                            onSettings = { showSettings = true },
-                        )
-                        state.error != null -> ErrorScreen(state.error!!, onRetry = vm::retry)
-                        else -> LoadingScreen(state.progress)
-                    }
+                    MainScreen(
+                        state = state,
+                        onSelect = vm::select,
+                        onAnother = { vm.another(it) },
+                        onRetry = { vm.retry(it) },
+                        onShare = { a, p -> share(a, p) },
+                        onOpenWiki = { openWiki(it) },
+                        onSettings = { showSettings = true },
+                    )
                 }
 
                 if (showSettings) SettingsDialog(
                     state = state,
                     onDismiss = { showSettings = false; vm.clearMessage() },
-                    onNearDate = vm::setNearDate,
+                    onMain = vm::setMain,
+                    onNearDate = { vm.setNearDate(it) },
                     onNotify = { on ->
                         vm.setNotify(on)
                         if (on) askPermissionIfNeeded(force = true)
@@ -138,7 +149,7 @@ class MainActivity : ComponentActivity() {
                         TimePickerDialog(context, { _, h, m -> vm.setNotifyTime(h, m) },
                             state.notifyHour, state.notifyMinute, true).show()
                     },
-                    onRefresh = { vm.refresh(silent = false) },
+                    onRefresh = { vm.refreshCurrent() },
                 )
             }
         }
@@ -149,11 +160,11 @@ class MainActivity : ComponentActivity() {
         vm.onResume()
     }
 
-    private fun share(p: Poem) {
+    private fun share(author: Author, p: Poem) {
         val text = buildString {
             append(p.title).append("\n\n").append(p.text)
             p.dateText?.let { append("\n\n").append(it) }
-            append("\n\nМарина Цветаева")
+            append("\n\n").append(author.fullName)
         }
         val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
         startActivity(Intent.createChooser(send, "Поделиться стихотворением"))
@@ -167,22 +178,32 @@ class MainActivity : ComponentActivity() {
 
 private val RU = Locale("ru")
 
+private val AUTHORS = Author.entries
+
 @Composable
-private fun PoemScreen(
+private fun MainScreen(
     state: UiState,
-    onAnother: () -> Unit,
-    onShare: () -> Unit,
-    onOpenWiki: () -> Unit,
+    onSelect: (Author) -> Unit,
+    onAnother: (Author) -> Unit,
+    onRetry: (Author) -> Unit,
+    onShare: (Author, Poem) -> Unit,
+    onOpenWiki: (Poem) -> Unit,
     onSettings: () -> Unit,
 ) {
-    val today = state.today ?: return
+    val pager = rememberPagerState(initialPage = AUTHORS.indexOf(state.selected)) { AUTHORS.size }
+    val scope = rememberCoroutineScope()
+    // Вкладка выбирается и касанием, и свайпом.
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.settledPage }.collect { onSelect(AUTHORS[it]) }
+    }
+
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         Row(
             Modifier.fillMaxWidth().padding(start = 24.dp, end = 8.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                state.date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", RU)).replaceFirstChar { it.uppercase() },
+                LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, d MMMM", RU)).replaceFirstChar { it.uppercase() },
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
@@ -191,7 +212,60 @@ private fun PoemScreen(
                 Icon(Icons.Filled.Settings, contentDescription = "Настройки", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (state.refreshing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 24.dp))
+        ScrollableTabRow(
+            selectedTabIndex = pager.currentPage,
+            edgePadding = 16.dp,
+            containerColor = MaterialTheme.colorScheme.background,
+            divider = { HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant) },
+        ) {
+            AUTHORS.forEachIndexed { i, a ->
+                Tab(
+                    selected = pager.currentPage == i,
+                    onClick = { scope.launch { pager.animateScrollToPage(i) } },
+                    selectedContentColor = MaterialTheme.colorScheme.primary,
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(a.tag)
+                            if (a == state.main) {
+                                Spacer(Modifier.width(4.dp))
+                                Icon(Icons.Filled.Star, contentDescription = "основной", modifier = Modifier.size(14.dp))
+                            }
+                        }
+                    },
+                )
+            }
+        }
+
+        HorizontalPager(state = pager, modifier = Modifier.weight(1f), key = { AUTHORS[it].key }) { page ->
+            val author = AUTHORS[page]
+            val ui = state.of(author)
+            when {
+                ui.today != null -> PoemScreen(
+                    author = author,
+                    ui = ui,
+                    onAnother = { onAnother(author) },
+                    onShare = { onShare(author, ui.today.poem) },
+                    onOpenWiki = { onOpenWiki(ui.today.poem) },
+                )
+                ui.error != null -> ErrorScreen(ui.error, onRetry = { onRetry(author) })
+                else -> LoadingScreen(author, ui.progress)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PoemScreen(
+    author: Author,
+    ui: AuthorUi,
+    onAnother: () -> Unit,
+    onShare: () -> Unit,
+    onOpenWiki: () -> Unit,
+) {
+    val today = ui.today ?: return
+    Column(Modifier.fillMaxSize()) {
+        if (ui.refreshing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 24.dp))
 
         AnimatedContent(
             targetState = today,
@@ -236,7 +310,7 @@ private fun PoemScreen(
                         )
                     }
                     Text(
-                        "Марина Цветаева",
+                        author.fullName,
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(top = 28.dp, bottom = 24.dp),
@@ -308,7 +382,7 @@ private fun sourceLabel(p: Poem): String? {
 }
 
 @Composable
-private fun LoadingScreen(progress: String?) {
+private fun LoadingScreen(author: Author, progress: String?) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -317,7 +391,8 @@ private fun LoadingScreen(progress: String?) {
         CircularProgressIndicator()
         Spacer(Modifier.height(24.dp))
         Text(
-            "Первый запуск: собираю все стихи Цветаевой с Викитеки. Это займёт минуту-другую, дальше всё работает без интернета.",
+            "Собираю все стихи ${author.genitive} с Викитеки. Это нужно сделать один раз и займёт " +
+                "несколько минут, дальше всё работает без интернета.",
             textAlign = TextAlign.Center, fontFamily = FontFamily.Serif, fontSize = 17.sp, lineHeight = 24.sp,
         )
         progress?.let {
@@ -347,6 +422,7 @@ private fun ErrorScreen(message: String, onRetry: () -> Unit) {
 private fun SettingsDialog(
     state: UiState,
     onDismiss: () -> Unit,
+    onMain: (Author) -> Unit,
     onNearDate: (Boolean) -> Unit,
     onNotify: (Boolean) -> Unit,
     onPickTime: () -> Unit,
@@ -358,6 +434,21 @@ private fun SettingsDialog(
         title = { Text("Настройки") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Основной автор", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Открывается при запуске, его стих приходит в уведомлении",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                AUTHORS.forEach { a ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onMain(a) }.padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = state.main == a, onClick = { onMain(a) })
+                        Text(a.fullName, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 SwitchRow(
                     "Ближе к сегодняшнему числу",
                     "Стих, написанный в этот же день или рядом с ним; если такого нет — случайный",
@@ -377,22 +468,27 @@ private fun SettingsDialog(
                     }
                 }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                val total = state.today?.total ?: 0
-                val last = if (state.lastRefreshMillis > 0)
-                    Instant.ofEpochMilli(state.lastRefreshMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+                val ui = state.current
+                val total = ui.today?.total ?: 0
+                val last = if (ui.lastRefreshMillis > 0)
+                    Instant.ofEpochMilli(ui.lastRefreshMillis).atZone(ZoneId.systemDefault()).toLocalDate()
                         .format(DateTimeFormatter.ofPattern("d MMMM yyyy", RU))
                 else "—"
-                Text("В базе: $total стихотворений\nОбновлено: $last", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${state.selected.fullName}\nВ базе: $total стихотворений\nОбновлено: $last",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onRefresh, enabled = !state.refreshing) {
-                    Text(if (state.refreshing) "Обновляю…" else "Обновить из Викитеки")
+                OutlinedButton(onClick = onRefresh, enabled = !ui.refreshing && !ui.loading) {
+                    Text(if (ui.refreshing || ui.loading) "Обновляю…" else "Обновить из Викитеки")
                 }
-                state.refreshMessage?.let {
+                ui.refreshMessage?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
                 }
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Тексты: ru.wikisource.org (Викитека), общественное достояние. База обновляется раз в неделю.",
+                    "Тексты: ru.wikisource.org (Викитека), общественное достояние. База каждого автора " +
+                        "собирается при первом открытии вкладки и обновляется раз в неделю.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }

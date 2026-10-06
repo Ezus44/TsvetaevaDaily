@@ -23,7 +23,9 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import ru.tsvetaeva.daily.MainActivity
 import ru.tsvetaeva.daily.R
+import ru.tsvetaeva.daily.core.Author
 import ru.tsvetaeva.daily.data.PoemRepository
+import ru.tsvetaeva.daily.data.Prefs
 import java.time.Duration
 import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
@@ -36,7 +38,7 @@ object DailyNotifications {
 
     /** Запланировать ближайшее уведомление. [replace] — при смене времени в настройках. */
     fun schedule(context: Context, replace: Boolean = false) {
-        val prefs = PoemRepository.get(context).prefs
+        val prefs = Prefs(context)
         val wm = WorkManager.getInstance(context)
         if (!prefs.notifyEnabled) {
             wm.cancelUniqueWork(WORK_DAILY)
@@ -50,7 +52,7 @@ object DailyNotifications {
 
     /** Следующее срабатывание из самого воркера: дописываем в цепочку, чтобы не отменить текущий. */
     internal fun scheduleNextFromWorker(context: Context) {
-        val prefs = PoemRepository.get(context).prefs
+        val prefs = Prefs(context)
         if (!prefs.notifyEnabled) return
         val request = OneTimeWorkRequestBuilder<DailyPoemWorker>()
             .setInitialDelay(delayToNext(prefs.notifyHour, prefs.notifyMinute).toMillis(), TimeUnit.MILLISECONDS)
@@ -87,7 +89,7 @@ object DailyNotifications {
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= 26) {
             val channel = NotificationChannel(CHANNEL_ID, "Стих дня", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                description = "Ежедневное стихотворение Марины Цветаевой"
+                description = "Ежедневное стихотворение основного автора"
                 setSound(null, null)
             }
             context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -95,7 +97,7 @@ object DailyNotifications {
     }
 
     @SuppressLint("MissingPermission") // проверяется в canPost()
-    fun show(context: Context, title: String, text: String, footer: String?) {
+    fun show(context: Context, author: Author, title: String, text: String, footer: String?) {
         if (!canPost(context)) return
         ensureChannel(context)
         val open = PendingIntent.getActivity(
@@ -112,6 +114,7 @@ object DailyNotifications {
         val n = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
+            .setSubText(author.fullName)
             .setContentText(preview)
             .setStyle(NotificationCompat.BigTextStyle().bigText(big))
             .setContentIntent(open)
@@ -128,11 +131,12 @@ object DailyNotifications {
 
 class DailyPoemWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        val repo = PoemRepository.get(applicationContext)
+        val author = Prefs(applicationContext).mainAuthor
+        val repo = PoemRepository.get(applicationContext, author)
         try {
             if (repo.poems().isEmpty()) runCatching { repo.refresh() }
             repo.today()?.let { t ->
-                DailyNotifications.show(applicationContext, t.poem.title, t.poem.text, t.poem.dateText)
+                DailyNotifications.show(applicationContext, author, t.poem.title, t.poem.text, t.poem.dateText)
             }
         } finally {
             DailyNotifications.scheduleNextFromWorker(applicationContext)
@@ -143,13 +147,25 @@ class DailyPoemWorker(context: Context, params: WorkerParameters) : CoroutineWor
 
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        val repo = PoemRepository.get(applicationContext)
-        if (!repo.needsRefresh()) return Result.success()
-        return try {
-            repo.refresh()
-            Result.success()
-        } catch (e: Exception) {
-            if (runAttemptCount < 3) Result.retry() else Result.failure()
+        // Обновляем только тех авторов, чьи вкладки уже открывали (и основного).
+        val main = Prefs(applicationContext).mainAuthor
+        var failed = false
+        for (author in Author.entries) {
+            val repo = PoemRepository.get(applicationContext, author)
+            if (author != main && !repo.hasData()) continue
+            if (!repo.needsRefresh()) continue
+            try {
+                repo.refresh()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed = true
+            }
+        }
+        return when {
+            !failed -> Result.success()
+            runAttemptCount < 3 -> Result.retry()
+            else -> Result.failure()
         }
     }
 }

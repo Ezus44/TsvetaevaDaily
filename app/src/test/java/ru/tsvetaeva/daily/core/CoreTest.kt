@@ -120,6 +120,39 @@ class CoreTest {
     check("display subpage name", WikiParser.displayTitle("Вечерний альбом (Цветаева)/Встреча") == "Встреча")
     check("display plain", WikiParser.displayTitle("Генералам двенадцатого года (Цветаева)") == "Генералам двенадцатого года")
 
+    // ---- Другие авторы ----
+    check("pushkin relevant", Author.PUSHKIN.isRelevantTitle("Пророк (Пушкин)") && Author.PUSHKIN.isRelevantTitle("Анчар (Пушкин)/ПСС 1959—1962 (ВТ)"))
+    check("pushkin uncle", !Author.PUSHKIN.isRelevantTitle("Опасный сосед (В. Л. Пушкин)"))
+    check("pushkin not tsvetaeva", !Author.PUSHKIN.isRelevantTitle("Мой Пушкин (Цветаева)") && Author.TSVETAEVA.isRelevantTitle("Мой Пушкин (Цветаева)"))
+    check("parnok relevant", Author.PARNOK.isRelevantTitle("«Тебе одной» (Парнок)"))
+    check("mayakovsky relevant", Author.MAYAKOVSKY.isRelevantTitle("Облако в штанах (Маяковский)"))
+    check("display edition", WikiParser.displayTitle("Анчар (Пушкин)/ПСС 1959—1962 (ВТ)") == "Анчар", WikiParser.displayTitle("Анчар (Пушкин)/ПСС 1959—1962 (ВТ)"))
+    check("display old orthography", WikiParser.displayTitle("Пророк (Пушкин)/ДО") == "Пророк", WikiParser.displayTitle("Пророк (Пушкин)/ДО"))
+    check("display mayakovsky", WikiParser.displayTitle("Облако в штанах (Маяковский)/1") == "Облако в штанах — 1")
+    val pIndex = WikiParser.parse(
+        "Александр Сергеевич Пушкин",
+        "=== 1826 ===\n* [[Пророк (Пушкин)|Пророк]] (8 сентября)\n* [[Мой Пушкин (Цветаева)]] (1937)\n",
+        author = Author.PUSHKIN,
+    )
+    check("pushkin hints", pIndex.dateHints.keys == setOf("Пророк (Пушкин)") && pIndex.dateHints["Пророк (Пушкин)"] == DateInfo(8, 9, 1826), pIndex.dateHints)
+    val edition = WikiParser.parse("Анчар (Пушкин)/ПСС 1959—1962 (ВТ)", "<poem>\nВ пустыне чахлой и скупой,\nНа почве, зноем раскаленной,\n</poem>", author = Author.PUSHKIN)
+    check("edition title", edition.poems.single().title == "Анчар", edition.poems.map { it.title })
+    val pushkinPoem = WikiParser.parse(
+        "К морю (Пушкин)", "<poem>\nПрощай, свободная стихия!\nВ последний раз передо мной\n\nМихайловское, 1824\n</poem>", author = Author.PUSHKIN,
+    )
+    check("pushkin year", pushkinPoem.poems.single().year == 1824 && pushkinPoem.poems.single().dateText == "Михайловское, 1824", pushkinPoem.poems)
+    check("pushkin word date", Dates.find("8 сентября 1826", years = Author.PUSHKIN.years) == DateInfo(8, 9, 1826))
+    check("year outside life", Dates.find("1826").year == null && Dates.find("1915", years = Author.PUSHKIN.years).year == null)
+
+    // ---- Дубликаты в разных изданиях ----
+    val modern = Poem("Пророк (Пушкин)", "Пророк (Пушкин)", "Пророк", "Духовной жаждою томим,\nВ пустыне мрачной я влачился,\nИ шестикрылый серафим", year = 1826)
+    val old = Poem("Пророк (Пушкин)/ДО", "Пророк (Пушкин)/ДО", "Пророк", "Духовной жаждою томимъ,\nВъ пустынѣ мрачной я влачился,\nИ шестикрылый серафимъ", day = 8, month = 9, year = 1826)
+    check("old orthography key", Dedupe.key(modern.text) == Dedupe.key(old.text), Dedupe.key(old.text))
+    val dd = Dedupe.dedupe(listOf(old, modern))
+    check("dedupe keeps modern", dd.size == 1 && dd[0].id == modern.id, dd)
+    check("dedupe merges date", dd[0].day == 8 && dd[0].month == 9, dd)
+    check("old orthography detect", Dedupe.isOldOrthography(old.text) && !Dedupe.isOldOrthography(modern.text))
+
     // ---- Выбор ----
     val ps = listOf(
         Poem("a", "a", "A", "x\ny", day = 6, month = 10),
