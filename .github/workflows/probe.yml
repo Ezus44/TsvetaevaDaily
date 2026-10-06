@@ -2,11 +2,22 @@ name: Диагностика Викитеки (временно)
 
 on:
   push:
-    paths: [".github/probe/**", ".github/workflows/probe.yml"]
+    paths: [".github/probe/**", ".github/workflows/probe.yml", "app/src/main/java/ru/tsvetaeva/daily/core/**"]
 
 jobs:
   probe:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        author: [TSVETAEVA, PARNOK, PUSHKIN, MAYAKOVSKY]
     steps:
       - uses: actions/checkout@v4
-      - run: python3 .github/probe/probe.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - run: gradle -p .github/probe run --args="${{ matrix.author }}" --console=plain -q

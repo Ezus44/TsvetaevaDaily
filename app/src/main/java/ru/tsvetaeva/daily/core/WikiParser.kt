@@ -31,8 +31,8 @@ object WikiParser {
     private val createdRe = Regex("""ДАТАСОЗДАНИЯ\s*=\s*([^|\n}]*)""")
     private val authorParenRe =
         Regex("""\s*\([^()]*(?:${Author.entries.joinToString("|") { it.stem }})[^()]*\)""")
-    /** Подстраницы с изданиями одного текста: «Пророк (Пушкин)/ПСС 1959—1962 (ВТ)», «…/ДО». */
-    private val editionRe = Regex("""(?:ДО|ВТ|(?:ПСС|СС|Изд\.?|Собрание сочинений)(?:\s.*)?|.*\((?:ДО|ВТ)\))""")
+    /** Подстраницы с изданиями одного текста: «Евгений Онегин (Пушкин)/ПСС 1977 (СО)», «…/1837 (ДО)». */
+    private val editionRe = Regex("""(?:ДО|ВТ|СО|(?:ПСС|СС|Изд\.?|Собрание сочинений)(?:\s.*)?|.*\((?:ДО|ВТ|СО)\))""")
 
     private val skipNamespaces = setOf(
         "категория", "category", "файл", "file", "изображение", "image", "автор", "author",
@@ -52,7 +52,7 @@ object WikiParser {
         author: Author = Author.TSVETAEVA,
     ): ParsedPage {
         val years = author.years
-        val raw = commentRe.replace(wikitext, "")
+        val raw = normalize(commentRe.replace(wikitext, ""))
         val links = extractLinks(pageTitle, raw)
         val hints = extractDateHints(pageTitle, raw, author)
         val pageDate = createdRe.find(raw)?.groupValues?.get(1)?.let { Dates.find(it, allowRoman = false, years = years) }
@@ -123,6 +123,64 @@ object WikiParser {
             )
         }
         return ParsedPage(poems, links, hints, isProse = false)
+    }
+
+    // ---------- разные способы разметки стихов → блоки <poem> ----------
+
+    /** Шаблоны-обёртки стихотворения: `{{poemx|Заглавие|текст|дата}}` и его варианты. */
+    private val poemTemplates = setOf("poemx", "f1", "f", "f0", "v", "poem")
+    private val twoOrthRe = Regex("""\{\{\s*2[ОoO]\s*\|([^{}|]+)(?:\|([^{}]*))?\}\}""")
+    private val tableRe = Regex("""(?m)^\{\|[^\n]*\n([\s\S]*?)^\|\}""")
+    private val brRe = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Приводит разные варианты разметки к тому, что понимает [parse]:
+     *  - `{{2О|Страница|Подпись}}` (ссылка на тексты в двух орфографиях) → `[[Страница|Подпись]]`;
+     *  - `{{poemx|…}}`, `{{f1|…}}`, `{{v|…}}` → `{{poem-on|…}}<poem>…</poem>{{poem-off|…}}`;
+     *  - если блоков `<poem>` нет — стихи в таблицах со строками через `<br>` (тексты из az.lib.ru).
+     */
+    fun normalize(src: String): String {
+        var s = twoOrthRe.replace(src) { m -> "[[" + m.groupValues[1] + (m.groups[2]?.let { "|" + it.value } ?: "") + "]]" }
+        val calls = Templates.find(s, poemTemplates).filter { it.args.isNotEmpty() }
+        if (calls.isNotEmpty()) {
+            val sb = StringBuilder()
+            var pos = 0
+            for (c in calls) {
+                sb.append(s, pos, c.range.first)
+                val title = if (c.args.size >= 2) c.args[0] else c.named["title"] ?: ""
+                val text = if (c.args.size >= 2) c.args[1] else c.args[0]
+                val date = c.args.getOrNull(2) ?: ""
+                sb.append("\n{{poem-on|").append(inline(title).ifEmpty { "* * *" }).append("}}\n<poem>\n")
+                    .append(text.trim('\n')).append("\n</poem>\n")
+                if (inline(date).isNotEmpty()) sb.append("{{poem-off|").append(inline(date)).append("}}\n")
+                pos = c.range.last + 1
+            }
+            sb.append(s, pos, s.length)
+            s = sb.toString()
+        }
+        if (!poemRe.containsMatchIn(s)) s = brTables(s)
+        return s
+    }
+
+    /** Текст параметра одной строкой без шаблонов и `|` — для `{{poem-on|…}}` и `{{poem-off|…}}`. */
+    private fun inline(v: String): String =
+        clean(v).lines().joinToString(" ").replace('|', '/').replace(Regex("""[{}]"""), "").replace(Regex("\\s+"), " ").trim()
+
+    /** Стихи в ячейках таблиц `{| … |}`: строки через `<br>`, заглавие — заголовком `==== … ====`. */
+    private fun brTables(src: String): String {
+        if (!brRe.containsMatchIn(src)) return src
+        return tableRe.replace(src) { m ->
+            val body = m.groupValues[1].replace(Regex("""^\s*\|[^|\n]*\|"""), "")
+            val heading = headingRe.find(body)
+            val text = (if (heading != null) body.removeRange(heading.range) else body)
+                .replace(Regex("""<span[^>]*id=[^>]*>\s*</span>"""), "")
+            val lines = text.split(brRe).map { it.replace('\n', ' ').trim() }
+            val verse = lines.filter { l -> l.replace(Regex("""'{2,}"""), "").any { it.isLetter() } }
+            // Оглавление (ссылки) или пустая ячейка — не стихи.
+            if (verse.size < 4 || verse.count { "[[" in it } * 3 > verse.size) return@replace m.value
+            val title = heading?.groupValues?.get(2)?.let(::inline).orEmpty().ifEmpty { "* * *" }
+            "\n== $title ==\n<poem>\n" + lines.joinToString("\n").trim('\n') + "\n</poem>\n"
+        }
     }
 
     // ---------- ссылки и подсказки с датами ----------
@@ -233,7 +291,10 @@ object WikiParser {
         s = s.replace(Regex("""\{\{|\}\}"""), "")
         s = s.replace("'''", "").replace("''", "")
         s = s.replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
+        // «<1916>» — год в угловых скобках (дата предположительная), это не HTML-тег.
+        s = s.replace(Regex("""<(\d[^<>\n]{0,30})>"""), "\u0001$1\u0002")
         s = s.replace(Regex("""<[^>]+>"""), "")
+        s = s.replace('\u0001', '<').replace('\u0002', '>')
         s = s.replace(Regex("""__[A-ZА-ЯЁ_]+__"""), "")
         s = decodeEntities(s)
         val lines = s.lines().map { line ->
@@ -257,6 +318,15 @@ object WikiParser {
         val positional = parts.drop(1).filter { !it.contains('=') }
         return when {
             name == "---" || name == "--" || name == "mdash" || name == "—" -> "—"
+            // «Лесенка» Маяковского: каждая следующая часть строки — со сдвигом вправо.
+            name == "лесенка" || name == "лесенка2" -> {
+                var shift = 0
+                positional.joinToString("\n") { part ->
+                    val p = part.trim()
+                    (" ".repeat(shift) + p).also { shift += p.length + 1 }
+                }
+            }
+            name == "indent" -> positional.lastOrNull()?.trim()?.takeIf { it.isNotEmpty() && it.toIntOrNull() == null } ?: "  "
             name == "gap" || name == "отступ" -> "  "
             name in keepTemplates || name.startsWith("lang") -> positional.lastOrNull()?.trim() ?: ""
             else -> ""
