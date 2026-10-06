@@ -76,9 +76,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 progress = "Собираю стихи с Викитеки…", refreshMessage = null)
         }
         try {
-            val count = repo.refresh { pages, poems ->
-                _state.update { it.copy(progress = "Просмотрено страниц: $pages\nНайдено стихотворений: $poems") }
-            }
+            var counts = ""
+            val count = repo.refresh(
+                onProgress = { pages, poems ->
+                    counts = "Просмотрено страниц: $pages\nНайдено стихотворений: $poems"
+                    _state.update { it.copy(progress = counts) }
+                },
+                onWait = { sec ->
+                    _state.update {
+                        it.copy(progress = listOf(counts, "Викитека просит не торопиться — жду $sec с…")
+                            .filter { l -> l.isNotEmpty() }.joinToString("\n"))
+                    }
+                },
+            )
             val t = _state.value.today ?: repo.today()
             _state.update {
                 settingsState(it).copy(
@@ -118,6 +128,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun errorText(e: Exception): String = when (e) {
+        is ru.tsvetaeva.daily.data.RateLimitedException ->
+            "Викитека временно ограничила запросы (HTTP 429). Так бывает при включённом VPN: " +
+                "отключите его или подождите 10–15 минут и попробуйте снова."
         is java.net.UnknownHostException, is java.net.ConnectException, is java.net.SocketTimeoutException ->
             "Нет связи с Викитекой. Проверьте интернет."
         else -> e.message ?: e.javaClass.simpleName

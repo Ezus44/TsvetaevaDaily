@@ -40,9 +40,13 @@ class PoemRepository private constructor(context: Context) {
      * Обходит Викитеку: оглавления → страницы стихов и циклов → подстраницы.
      * Берутся только страницы, в названии которых указан автор «(Цветаева)».
      */
-    suspend fun refresh(onProgress: (pages: Int, poems: Int) -> Unit = { _, _ -> }): Int =
+    suspend fun refresh(
+        onProgress: (pages: Int, poems: Int) -> Unit = { _, _ -> },
+        onWait: (seconds: Int) -> Unit = {},
+    ): Int =
         mutex.withLock {
             withContext(Dispatchers.IO) {
+                api.onWait = onWait
                 val queue = ArrayDeque<String>()
                 val seen = HashSet<String>()
                 val hints = HashMap<String, DateInfo>()
@@ -56,6 +60,8 @@ class PoemRepository private constructor(context: Context) {
                 }
 
                 var pagesDone = 0
+                var interrupted: Exception? = null
+                try {
                 while (queue.isNotEmpty() && pagesDone < MAX_PAGES) {
                     val batch = ArrayList<String>()
                     while (queue.isNotEmpty() && batch.size < 50) batch += queue.removeFirst()
@@ -78,6 +84,14 @@ class PoemRepository private constructor(context: Context) {
                     pagesDone += batch.size
                     onProgress(pagesDone, found.size)
                 }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Викитека перестала отвечать на середине — сохраним то, что успели собрать.
+                    interrupted = e
+                } finally {
+                    api.onWait = null
+                }
 
                 // Подсказки из оглавлений могли прийти позже самих страниц — дополняем даты.
                 val withHints = found.values.map { p ->
@@ -87,13 +101,23 @@ class PoemRepository private constructor(context: Context) {
                         p.copy(day = d.day, month = d.month, year = d.year)
                     }
                 }
-                val result = dedupe(withHints).sortedWith(compareBy({ it.year ?: 9999 }, { it.month ?: 13 }, { it.day ?: 32 }))
+                // При неполном обходе не теряем то, что было собрано раньше.
+                val merged = if (interrupted == null) withHints else {
+                    val byId = LinkedHashMap<String, Poem>()
+                    (cache ?: store.load()).forEach { byId[it.id] = it }
+                    withHints.forEach { byId[it.id] = it }
+                    byId.values.toList()
+                }
+                val result = dedupe(merged).sortedWith(compareBy({ it.year ?: 9999 }, { it.month ?: 13 }, { it.day ?: 32 }))
                 if (result.size < MIN_POEMS) {
-                    throw IllegalStateException("С Викитеки получено слишком мало стихов (${result.size}). Попробуйте позже.")
+                    throw interrupted
+                        ?: IllegalStateException("С Викитеки получено слишком мало стихов (${result.size}). Попробуйте позже.")
                 }
                 store.save(result)
                 cache = result
-                prefs.lastRefreshMillis = System.currentTimeMillis()
+                prefs.lastRefreshMillis = if (interrupted == null) System.currentTimeMillis()
+                // Неполная база: попробуем дособрать через несколько часов.
+                else System.currentTimeMillis() - REFRESH_INTERVAL_MS + RETRY_PARTIAL_MS
                 result.size
             }
         }
@@ -158,6 +182,7 @@ class PoemRepository private constructor(context: Context) {
 
     companion object {
         const val REFRESH_INTERVAL_MS = 7L * 24 * 60 * 60 * 1000
+        private const val RETRY_PARTIAL_MS = 3L * 60 * 60 * 1000
         private const val MAX_PAGES = 4000
         private const val MIN_POEMS = 20
         private val PAGES_TAG = Regex("""<pages\s""", RegexOption.IGNORE_CASE)
