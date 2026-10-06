@@ -108,13 +108,30 @@ class MarkupTest {
 Грезы грезятся мне беспечальные,<br>
 Даль младенчески ясна.<br>
 |}
+
+{|
+|width="100%"|
+
+==== 31 ЯНВАРЯ ====
+====== (Январь 1922) ======
+Евдоксии Федоровне Никитиной
+Кармином начертала б эти числа<br>
+Теперь я на листке календаря,<br>
+Исполнен день последний января,<br>
+Со встречи с Вами, радостного смысла.<br>
+|}
 """
         val page = WikiParser.parse("Лоза (Парнок)", wiki, author = Author.PARNOK)
-        assertEquals(page.poems.map { it.title }.toString(), 2, page.poems.size)
+        assertEquals(page.poems.map { it.title }.toString(), 3, page.poems.size)
         assertEquals("БЕЛОЙ НОЧЬЮ", page.poems[0].title)
         assertTrue(page.poems[0].text, page.poems[0].text.startsWith("Не небо — купол безвоздушный\nНад голой"))
         assertTrue(page.poems[0].text, page.poems[0].text.lines().contains(""))
         assertEquals("«Словно дан мои первоначальные…»", page.poems[1].title)
+        assertEquals("31 ЯНВАРЯ", page.poems[2].title)
+        assertEquals(
+            "Евдоксии Федоровне Никитиной\nКармином начертала б эти числа\nТеперь я на листке календаря,",
+            page.poems[2].text.lines().take(3).joinToString("\n"),
+        )
     }
 
     @Test

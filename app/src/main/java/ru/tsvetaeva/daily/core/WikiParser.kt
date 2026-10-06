@@ -229,10 +229,14 @@ object WikiParser {
             val body = m.groupValues[1]
                 .replace(Regex("""(?m)^\s*\|-.*$"""), "")
                 .replace(Regex("""(?m)^\s*\|\|?(?:\s*[\w-]+\s*=\s*"[^"]*")*\s*\|?"""), "")
+            // Первый заголовок в ячейке — заглавие стиха, остальные (номера частей, годы) не нужны.
             val heading = headingRe.find(body)
             val text = (if (heading != null) body.removeRange(heading.range) else body)
+                .replace(headingRe, "")
                 .replace(Regex("""<span[^>]*id=[^>]*>\s*</span>"""), "")
-            val lines = text.split(brRe).map { it.replace('\n', ' ').trim() }
+            // Строка заканчивается на <br> и перевод строки; посвящение — просто перевод строки.
+            val lines = text.replace(Regex("""<br\s*/?>[ \t]*\n""", RegexOption.IGNORE_CASE), "\n")
+                .replace(brRe, "\n").trim('\n').lines().map { it.trim() }
             val verse = lines.filter { l -> l.replace(Regex("""'{2,}"""), "").any { it.isLetter() } }
             // Оглавление (ссылки) или пустая ячейка — не стихи.
             if (verse.size < 4 || verse.count { "[[" in it } * 3 > verse.size) return@replace m.value
