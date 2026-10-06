@@ -28,6 +28,8 @@ object WikiParser {
     private val poemOffRe = Regex("""\{\{\s*[Pp]oem-off\s*\|([^{}]*)\}\}""")
     private val boldLineRe = Regex("""(?m)^\s*'''(.+?)'''\s*$""")
     private val centerRe = Regex("""<center>([\s\S]*?)</center>""", RegexOption.IGNORE_CASE)
+    /** Страницы со стихотворными текстами, которые не стоит показывать как «стих дня». */
+    private val skipTitleRe = Regex("""^Либретто""")
     private val createdRe = Regex("""ДАТАСОЗДАНИЯ\s*=\s*([^|\n}]*)""")
     private val authorParenRe =
         Regex("""\s*\([^()]*(?:${Author.entries.joinToString("|") { it.stem }})[^()]*\)""")
@@ -57,12 +59,14 @@ object WikiParser {
         val hints = extractDateHints(pageTitle, raw, author)
         val pageDate = createdRe.find(raw)?.groupValues?.get(1)?.let { Dates.find(it, allowRoman = false, years = years) }
 
-        val blocks = poemRe.findAll(raw).toList()
-        if (blocks.isEmpty()) return ParsedPage(emptyList(), links, hints, isProse = false)
+        // Сам текст: без карточки {{Отексте}} и без примечаний, вариантов и черновиков после него.
+        val body = mainText(raw)
+        val blocks = poemRe.findAll(body).toList()
+        if (blocks.isEmpty() || skipTitleRe.containsMatchIn(pageTitle)) return ParsedPage(emptyList(), links, hints, isProse = false)
 
         // Проза с цитатами в стихах: текста вне блоков намного больше, чем в блоках.
         val poemLen = blocks.sumOf { clean(it.groupValues[1]).length }
-        val outsideLen = clean(poemRe.replace(raw, "")).replace(Regex("\\s+"), " ").length
+        val outsideLen = clean(poemRe.replace(body, "")).replace(Regex("\\s+"), " ").length
         if (outsideLen > 3000 && outsideLen > poemLen * 3) {
             return ParsedPage(emptyList(), links, hints, isProse = true)
         }
@@ -71,9 +75,9 @@ object WikiParser {
         val poems = ArrayList<Poem>()
         var prevEnd = 0
         blocks.forEachIndexed { i, m ->
-            val before = raw.substring(prevEnd, m.range.first)
-            val afterEnd = if (i + 1 < blocks.size) blocks[i + 1].range.first else raw.length
-            val after = raw.substring(m.range.last + 1, afterEnd).take(600)
+            val before = body.substring(prevEnd, m.range.first)
+            val afterEnd = if (i + 1 < blocks.size) blocks[i + 1].range.first else body.length
+            val after = body.substring(m.range.last + 1, afterEnd).take(600)
             prevEnd = m.range.last + 1
 
             val lines = clean(m.groupValues[1]).lines().toMutableList()
@@ -99,6 +103,8 @@ object WikiParser {
             val text = lines.joinToString("\n").trimEnd()
             val nonEmpty = lines.count { it.isNotBlank() }
             if (nonEmpty < 2 || text.length < 30) return@forEachIndexed
+            // Проза в стиховой разметке (комментарии, цитаты из статей): длинные строки.
+            if (lines.count { it.length > 160 } * 5 > nonEmpty) return@forEachIndexed
 
             val heading = findHeading(before)
             val title = when {
@@ -127,8 +133,22 @@ object WikiParser {
 
     // ---------- разные способы разметки стихов → блоки <poem> ----------
 
-    /** Шаблоны-обёртки стихотворения: `{{poemx|Заглавие|текст|дата}}` и его варианты. */
-    private val poemTemplates = setOf("poemx", "f1", "f", "f0", "v", "poem")
+    /** Заголовок, после которого идёт уже не сам текст: примечания, варианты, черновики. */
+    private val notesRe = Regex(
+        """(?m)^(?:=+\s*|'''\s*)(?:Примечани|Комментари|Варианты|Разночтени|Черновые|Черновики|Другие редакции|Цитаты|Источники|См\. также)""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private fun mainText(raw: String): String {
+        var s = raw
+        Templates.find(s, setOf("отексте", "header2", "обавторе", "об авторе")).firstOrNull()?.let { s = s.removeRange(it.range) }
+        notesRe.find(s)?.let { s = s.substring(0, it.range.first) }
+        return s
+    }
+
+    /** Шаблоны-обёртки стихотворения: `{{poemx|Заглавие|текст|дата}}` и его варианты (`f1`, `f2`, `v`…). */
+    private fun isPoemTemplate(name: String) = name == "poemx" || name == "v" || name == "poem" || name.matches(fNameRe)
+    private val fNameRe = Regex("""f\d{0,2}""")
     private val twoOrthRe = Regex("""\{\{\s*2[ОoO]\s*\|([^{}|]+)(?:\|([^{}]*))?\}\}""")
     private val tableRe = Regex("""(?m)^\{\|[^\n]*\n([\s\S]*?)^\|\}""")
     private val brRe = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
@@ -141,7 +161,7 @@ object WikiParser {
      */
     fun normalize(src: String): String {
         var s = twoOrthRe.replace(src) { m -> "[[" + m.groupValues[1] + (m.groups[2]?.let { "|" + it.value } ?: "") + "]]" }
-        val calls = Templates.find(s, poemTemplates).filter { it.args.isNotEmpty() }
+        val calls = Templates.find(s, ::isPoemTemplate).filter { it.args.isNotEmpty() }
         if (calls.isNotEmpty()) {
             val sb = StringBuilder()
             var pos = 0
@@ -158,8 +178,43 @@ object WikiParser {
             sb.append(s, pos, s.length)
             s = sb.toString()
         }
+        s = bareVerse(s)
         if (!poemRe.containsMatchIn(s)) s = brTables(s)
         return s
+    }
+
+    private val bareStopRe = Regex("""\{\{\s*[Pp]oem-(?:on|off)\b|(?m)^=|\[\[\s*Категория:|<references""")
+
+    /**
+     * `{{poem-on|Заглавие}}`, за которым стихи идут без `<poem>` (так у Маяковского): строки
+     * до `{{poem-off}}`, заголовка или категорий оборачиваются в `<poem>`.
+     */
+    private fun bareVerse(src: String): String {
+        val ons = Templates.find(src, setOf("poem-on"))
+        if (ons.isEmpty()) return src
+        val sb = StringBuilder()
+        var pos = 0
+        for (on in ons) {
+            val start = on.range.last + 1
+            if (start < pos) continue
+            val stop = bareStopRe.find(src, start)?.range?.first ?: src.length
+            val seg = src.substring(start, stop)
+            if (seg.contains("<poem", ignoreCase = true) || seg.isBlank()) continue
+            sb.append(src, pos, start)
+            sb.append("\n<poem>\n").append(collapseBlankLines(seg.trim('\n'))).append("\n</poem>\n")
+            pos = stop
+        }
+        sb.append(src, pos, src.length)
+        return sb.toString()
+    }
+
+    /** Строки через пустую строку, строфы — через две: так набирают стихи без `<poem>`. */
+    private fun collapseBlankLines(seg: String): String {
+        val lines = seg.lines()
+        val blank = lines.count { it.isBlank() }
+        if (blank * 2 < lines.size - blank) return seg
+        return seg.replace(Regex("""\n[ \t]*\n(?:[ \t]*\n)+"""), "\u0000")
+            .replace(Regex("""\n[ \t]*\n"""), "\n").replace("\u0000", "\n\n")
     }
 
     /** Текст параметра одной строкой без шаблонов и `|` — для `{{poem-on|…}}` и `{{poem-off|…}}`. */
@@ -170,7 +225,10 @@ object WikiParser {
     private fun brTables(src: String): String {
         if (!brRe.containsMatchIn(src)) return src
         return tableRe.replace(src) { m ->
-            val body = m.groupValues[1].replace(Regex("""^\s*\|[^|\n]*\|"""), "")
+            // Разметка ячеек и строк таблицы: «|width="50%"|», «||», «|-».
+            val body = m.groupValues[1]
+                .replace(Regex("""(?m)^\s*\|-.*$"""), "")
+                .replace(Regex("""(?m)^\s*\|\|?(?:\s*[\w-]+\s*=\s*"[^"]*")*\s*\|?"""), "")
             val heading = headingRe.find(body)
             val text = (if (heading != null) body.removeRange(heading.range) else body)
                 .replace(Regex("""<span[^>]*id=[^>]*>\s*</span>"""), "")

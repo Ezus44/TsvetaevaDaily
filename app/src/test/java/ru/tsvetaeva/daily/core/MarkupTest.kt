@@ -131,4 +131,65 @@ class MarkupTest {
         assertEquals("Глава 1", WikiParser.displayTitle("Евгений Онегин (Пушкин)/ПСС 1977 (СО)/Глава 1"))
         assertEquals("Будрыс и его сыновья", WikiParser.displayTitle("Будрыс и его сыновья (Мицкевич; Пушкин)"))
     }
+    @Test
+    fun f2CycleAndNotesAfterPoem() {
+        val wiki = """
+{{Отексте
+| АВТОР = [[Марина Ивановна Цветаева]]
+| ИСТОЧНИК = очень длинный источник
+}}
+
+{{f2|1|
+Облака — вокруг,
+Купола — вокруг,
+Надо всей Москвой
+Сколько хватит рук! —
+|31 марта 1916}}
+
+== Примечания ==
+<references/>
+""" + "Длинный комментарий текстолога к стихотворению. ".repeat(120) + """
+== ВАРИАНТЫ ==
+<poem>
+Черновая строка первая,
+черновая строка вторая.
+</poem>
+"""
+        val page = WikiParser.parse("Стихи о Москве (Цветаева)/1", wiki)
+        assertEquals(page.poems.toString(), 1, page.poems.size)
+        val p = page.poems.single()
+        assertEquals("Стихи о Москве — 1", p.title)
+        assertTrue(p.toString(), p.day == 31 && p.month == 3 && p.year == 1916)
+    }
+
+    @Test
+    fun bareVerseAfterPoemOn() {
+        val wiki = """
+{{poem-on|Кем быть?}}
+У меня растут года,
+
+будет и семнадцать.
+
+Где работать мне тогда,
+
+чем заниматься?<br />
+
+
+Нужные работники —
+
+столяры и плотники!
+{{Лесенка|сначала|мы|берём бревно|строка=3|№=10}}
+{{poem-off|1928}}
+
+[[Категория:Поэзия Владимира Владимировича Маяковского]]
+"""
+        val p = WikiParser.parse("Кем быть? (Маяковский)", wiki, author = Author.MAYAKOVSKY).poems.single()
+        assertEquals("Кем быть?", p.title)
+        assertEquals(
+            "У меня растут года,\nбудет и семнадцать.\nГде работать мне тогда,\nчем заниматься?\n\nНужные работники —\nстоляры и плотники!\nсначала\n        мы\n           берём бревно",
+            p.text,
+        )
+        assertEquals(1928, p.year)
+    }
 }
+

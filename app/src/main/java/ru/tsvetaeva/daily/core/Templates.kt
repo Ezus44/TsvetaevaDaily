@@ -12,8 +12,11 @@ object Templates {
         val range: IntRange,
     )
 
-    /** Все вызовы шаблонов верхнего уровня с именами из [names] (регистр не важен). */
-    fun find(src: String, names: Set<String>): List<Call> {
+    /** Все вызовы шаблонов с именами из [names] (регистр не важен). */
+    fun find(src: String, names: Set<String>): List<Call> = find(src) { it in names }
+
+    /** Все вызовы шаблонов, чьё имя (в нижнем регистре) подходит под [accept]; вложенные в них не ищутся. */
+    fun find(src: String, accept: (String) -> Boolean): List<Call> {
         val out = ArrayList<Call>()
         var i = 0
         while (true) {
@@ -24,7 +27,7 @@ object Templates {
             val body = src.substring(start + 2, end - 1)
             val parts = splitTop(body)
             val name = parts[0].trim().lowercase().replace('_', ' ')
-            if (name in names) {
+            if (accept(name)) {
                 val args = ArrayList<String>()
                 val named = HashMap<String, String>()
                 for (p in parts.drop(1)) {
