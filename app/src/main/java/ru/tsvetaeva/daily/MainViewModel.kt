@@ -3,6 +3,8 @@ package ru.tsvetaeva.daily
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -25,6 +27,8 @@ data class AuthorUi(
     val refreshing: Boolean = false,
     val refreshMessage: String? = null,
     val lastRefreshMillis: Long = 0,
+    /** Стихи автора ещё не скачаны — ждём, пока пользователь сам решит их загрузить. */
+    val notLoaded: Boolean = false,
 )
 
 data class UiState(
@@ -37,6 +41,8 @@ data class UiState(
     val notifyEnabled: Boolean = true,
     val notifyHour: Int = 9,
     val notifyMinute: Int = 0,
+    /** Авторы, чьи стихи уже лежат на телефоне. */
+    val downloaded: Set<Author> = emptySet(),
 ) {
     fun of(author: Author): AuthorUi = authors[author] ?: AuthorUi()
     val current: AuthorUi get() = of(selected)
@@ -50,6 +56,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Авторы, чьи вкладки уже открывались: их стих дня держим актуальным. */
     private val opened = LinkedHashSet<Author>()
 
+    /** Идущие загрузки с Викитеки — чтобы их можно было отменить. */
+    private val jobs = HashMap<Author, Job>()
+
     init {
         select(prefs.mainAuthor)
     }
@@ -62,12 +71,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notifyEnabled = prefs.notifyEnabled,
         notifyHour = prefs.notifyHour,
         notifyMinute = prefs.notifyMinute,
+        downloaded = Author.entries.filter { repo(it).hasData() }.toSet(),
     )
 
     private fun updateAuthor(a: Author, f: (AuthorUi) -> AuthorUi) =
         _state.update { it.copy(authors = it.authors + (a to f(it.of(a)))) }
 
-    /** Переключение вкладки: база автора собирается при первом открытии. */
+    /** Переключение вкладки. Стихи сами не скачиваются — только по кнопке «Загрузить». */
     fun select(a: Author) {
         _state.update { it.copy(selected = a) }
         if (opened.add(a)) load(a)
@@ -79,12 +89,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val t = repo.today(date)
         if (t != null) {
             updateAuthor(a) {
-                it.copy(date = date, today = t, loading = false, error = null, lastRefreshMillis = repo.lastRefreshMillis)
+                it.copy(date = date, today = t, loading = false, error = null, notLoaded = false,
+                    lastRefreshMillis = repo.lastRefreshMillis)
             }
             if (repo.needsRefresh()) refresh(a, silent = true)
-        } else {
-            refresh(a, silent = false)
+        } else if (!_state.value.of(a).loading) {
+            updateAuthor(a) { AuthorUi(date = date, notLoaded = true) }
         }
+    }
+
+    /** Скачать стихи автора с Викитеки (по выбору пользователя). */
+    fun download(a: Author) {
+        opened.add(a)
+        updateAuthor(a) { it.copy(notLoaded = false, error = null) }
+        refresh(a, silent = false)
+    }
+
+    /** Остановить загрузку: если стихов ещё не было, вкладка снова предложит загрузить. */
+    fun cancelDownload(a: Author) {
+        jobs[a]?.cancel()
+    }
+
+    /** Удалить скачанные стихи автора с телефона. */
+    fun delete(a: Author) {
+        jobs[a]?.cancel()
+        repo(a).delete()
+        if (prefs.mainAuthor == a) DailyNotifications.schedule(getApplication(), replace = true)
+        updateAuthor(a) { AuthorUi(notLoaded = true) }
+        _state.update { settingsState(it) }
     }
 
     /** Вызывается при возвращении в приложение: если наступил новый день — новый стих. */
@@ -96,23 +128,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun retry(a: Author) = load(a)
-
     fun another(a: Author) = viewModelScope.launch {
         repo(a).another()?.let { t -> updateAuthor(a) { it.copy(today = t, date = LocalDate.now()) } }
     }
 
-    fun refreshCurrent() = refresh(_state.value.selected, silent = false)
+    /** Обновить уже скачанные стихи автора вручную (из настроек). */
+    fun update(a: Author) {
+        opened.add(a)
+        refresh(a, silent = false)
+    }
 
-    private fun refresh(a: Author, silent: Boolean) = viewModelScope.launch {
-        val ui = _state.value.of(a)
-        if (ui.refreshing || ui.loading) return@launch
+    private fun refresh(a: Author, silent: Boolean) {
+        if (jobs[a]?.isActive == true) return
+        jobs[a] = viewModelScope.launch { doRefresh(a, silent) }
+    }
+
+    private suspend fun doRefresh(a: Author, silent: Boolean) {
+        val repo = repo(a)
+        // Стихи уже на телефоне, но вкладку ещё не открывали: покажем их, пока идёт обновление.
+        if (_state.value.of(a).today == null && repo.hasData()) {
+            repo.today()?.let { t -> updateAuthor(a) { it.copy(today = t, notLoaded = false, date = LocalDate.now()) } }
+        }
         updateAuthor(a) {
             if (silent) it.copy(refreshing = true, refreshMessage = null)
             else it.copy(loading = it.today == null, refreshing = it.today != null, error = null,
                 progress = "Собираю стихи с Викитеки…", refreshMessage = null)
         }
-        val repo = repo(a)
         try {
             var counts = ""
             val count = repo.refresh(
@@ -138,6 +179,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     refreshMessage = if (silent) null else "База обновлена: $count стихотворений",
                 )
             }
+            _state.update { settingsState(it) }
+        } catch (e: CancellationException) {
+            updateAuthor(a) {
+                if (it.today == null) AuthorUi(notLoaded = true)
+                else it.copy(loading = false, refreshing = false, progress = null,
+                    refreshMessage = if (silent) null else "Обновление остановлено")
+            }
+            throw e
         } catch (e: Exception) {
             updateAuthor(a) {
                 if (it.today == null) it.copy(loading = false, refreshing = false, error = errorText(e))
@@ -147,7 +196,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun clearMessage() = updateAuthor(_state.value.selected) { it.copy(refreshMessage = null) }
+    fun clearMessages() = _state.update { st ->
+        st.copy(authors = st.authors.mapValues { it.value.copy(refreshMessage = null) })
+    }
 
     fun setMain(a: Author) {
         prefs.mainAuthor = a

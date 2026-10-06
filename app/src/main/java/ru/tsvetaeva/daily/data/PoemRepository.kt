@@ -35,8 +35,15 @@ class PoemRepository private constructor(context: Context, val author: Author) {
         store.load().also { cache = it }
     }
 
-    /** База уже собиралась (хотя бы раз). */
+    /** Стихи автора уже скачаны. */
     fun hasData(): Boolean = cache?.isNotEmpty() ?: store.exists()
+
+    /** Удалить скачанные стихи (загрузить снова можно в любой момент). */
+    fun delete() {
+        store.delete()
+        cache = emptyList()
+        state.clear()
+    }
 
     val lastRefreshMillis: Long get() = state.lastRefreshMillis
 

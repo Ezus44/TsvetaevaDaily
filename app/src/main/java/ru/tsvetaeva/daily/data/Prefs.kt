@@ -62,4 +62,9 @@ class AuthorPrefs(context: Context, author: Author) {
     var lastRefreshMillis: Long
         get() = sp.getLong("last_refresh$suffix", 0L)
         set(v) = sp.edit().putLong("last_refresh$suffix", v).apply()
+
+    fun clear() {
+        sp.edit().remove("today_day$suffix").remove("today_id$suffix").remove("recent$suffix")
+            .remove("last_refresh$suffix").apply()
+    }
 }

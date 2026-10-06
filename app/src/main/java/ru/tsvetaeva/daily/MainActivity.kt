@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -129,7 +130,8 @@ class MainActivity : ComponentActivity() {
                         state = state,
                         onSelect = vm::select,
                         onAnother = { vm.another(it) },
-                        onRetry = { vm.retry(it) },
+                        onDownload = vm::download,
+                        onCancel = vm::cancelDownload,
                         onShare = { a, p -> share(a, p) },
                         onOpenWiki = { openWiki(it) },
                         onSettings = { showSettings = true },
@@ -138,8 +140,12 @@ class MainActivity : ComponentActivity() {
 
                 if (showSettings) SettingsDialog(
                     state = state,
-                    onDismiss = { showSettings = false; vm.clearMessage() },
+                    onDismiss = { showSettings = false; vm.clearMessages() },
                     onMain = vm::setMain,
+                    onDownload = vm::download,
+                    onUpdate = vm::update,
+                    onCancel = vm::cancelDownload,
+                    onDelete = vm::delete,
                     onNearDate = { vm.setNearDate(it) },
                     onNotify = { on ->
                         vm.setNotify(on)
@@ -149,7 +155,6 @@ class MainActivity : ComponentActivity() {
                         TimePickerDialog(context, { _, h, m -> vm.setNotifyTime(h, m) },
                             state.notifyHour, state.notifyMinute, true).show()
                     },
-                    onRefresh = { vm.refreshCurrent() },
                 )
             }
         }
@@ -185,7 +190,8 @@ private fun MainScreen(
     state: UiState,
     onSelect: (Author) -> Unit,
     onAnother: (Author) -> Unit,
-    onRetry: (Author) -> Unit,
+    onDownload: (Author) -> Unit,
+    onCancel: (Author) -> Unit,
     onShare: (Author, Poem) -> Unit,
     onOpenWiki: (Poem) -> Unit,
     onSettings: () -> Unit,
@@ -248,8 +254,10 @@ private fun MainScreen(
                     onShare = { onShare(author, ui.today.poem) },
                     onOpenWiki = { onOpenWiki(ui.today.poem) },
                 )
-                ui.error != null -> ErrorScreen(ui.error, onRetry = { onRetry(author) })
-                else -> LoadingScreen(author, ui.progress)
+                ui.loading -> LoadingScreen(author, ui.progress, onCancel = { onCancel(author) })
+                ui.error != null -> ErrorScreen(ui.error, onRetry = { onDownload(author) })
+                ui.notLoaded -> DownloadScreen(author, onDownload = { onDownload(author) })
+                else -> Box(Modifier.fillMaxSize()) // читаем базу с телефона — доли секунды
             }
         }
     }
@@ -382,7 +390,30 @@ private fun sourceLabel(p: Poem): String? {
 }
 
 @Composable
-private fun LoadingScreen(author: Author, progress: String?) {
+private fun DownloadScreen(author: Author, onDownload: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "Стихи ${author.genitive} ещё не загружены",
+            fontFamily = FontFamily.Serif, fontSize = 22.sp, lineHeight = 28.sp, textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Приложение соберёт их с Викитеки — это нужно сделать один раз, понадобится интернет " +
+                "и несколько минут" + (if (author == Author.PUSHKIN) " (у Пушкина — дольше всех)" else "") +
+                ". Дальше всё работает без интернета.",
+            textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(24.dp))
+        Button(onClick = onDownload) { Text("Загрузить") }
+    }
+}
+
+@Composable
+private fun LoadingScreen(author: Author, progress: String?, onCancel: () -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -400,6 +431,8 @@ private fun LoadingScreen(author: Author, progress: String?) {
             Text(it, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        Spacer(Modifier.height(24.dp))
+        TextButton(onClick = onCancel) { Text("Отменить") }
     }
 }
 
@@ -423,11 +456,24 @@ private fun SettingsDialog(
     state: UiState,
     onDismiss: () -> Unit,
     onMain: (Author) -> Unit,
+    onDownload: (Author) -> Unit,
+    onUpdate: (Author) -> Unit,
+    onCancel: (Author) -> Unit,
+    onDelete: (Author) -> Unit,
     onNearDate: (Boolean) -> Unit,
     onNotify: (Boolean) -> Unit,
     onPickTime: () -> Unit,
-    onRefresh: () -> Unit,
 ) {
+    var confirmDelete by remember { mutableStateOf<Author?>(null) }
+    confirmDelete?.let { a ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("Удалить стихи?") },
+            text = { Text("Стихи ${a.genitive} будут удалены с телефона. Загрузить их снова можно в любой момент.") },
+            confirmButton = { TextButton(onClick = { onDelete(a); confirmDelete = null }) { Text("Удалить") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Отмена") } },
+        )
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("Готово") } },
@@ -445,7 +491,15 @@ private fun SettingsDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(selected = state.main == a, onClick = { onMain(a) })
-                        Text(a.fullName, style = MaterialTheme.typography.bodyLarge)
+                        Column {
+                            Text(a.fullName, style = MaterialTheme.typography.bodyLarge)
+                            if (state.main == a && a !in state.downloaded) {
+                                Text(
+                                    "стихи не загружены — уведомлений не будет",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
                     }
                 }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -468,32 +522,70 @@ private fun SettingsDialog(
                     }
                 }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                val ui = state.current
-                val total = ui.today?.total ?: 0
-                val last = if (ui.lastRefreshMillis > 0)
-                    Instant.ofEpochMilli(ui.lastRefreshMillis).atZone(ZoneId.systemDefault()).toLocalDate()
-                        .format(DateTimeFormatter.ofPattern("d MMMM yyyy", RU))
-                else "—"
-                Text(
-                    "${state.selected.fullName}\nВ базе: $total стихотворений\nОбновлено: $last",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onRefresh, enabled = !ui.refreshing && !ui.loading) {
-                    Text(if (ui.refreshing || ui.loading) "Обновляю…" else "Обновить из Викитеки")
-                }
-                ui.refreshMessage?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                Text("Загруженные авторы", style = MaterialTheme.typography.titleSmall)
+                AUTHORS.forEach { a ->
+                    AuthorRow(
+                        author = a, ui = state.of(a), downloaded = a in state.downloaded,
+                        onDownload = { onDownload(a) }, onUpdate = { onUpdate(a) },
+                        onCancel = { onCancel(a) }, onDelete = { confirmDelete = a },
+                    )
                 }
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Тексты: ru.wikisource.org (Викитека), общественное достояние. База каждого автора " +
-                        "собирается при первом открытии вкладки и обновляется раз в неделю.",
+                    "Тексты: ru.wikisource.org (Викитека), общественное достояние. Стихи автора скачиваются " +
+                        "только по кнопке «Загрузить»; загруженные обновляются раз в неделю по Wi‑Fi.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
     )
+}
+
+/** Строка автора в настройках: сколько стихов на телефоне и что с ними сделать. */
+@Composable
+private fun AuthorRow(
+    author: Author,
+    ui: AuthorUi,
+    downloaded: Boolean,
+    onDownload: () -> Unit,
+    onUpdate: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val busy = ui.loading || ui.refreshing
+    val status = when {
+        ui.loading -> "загружается…"
+        ui.refreshing -> "обновляется…"
+        !downloaded -> "не загружены"
+        else -> listOfNotNull(
+            ui.today?.total?.let { "$it стихотворений" },
+            ui.lastRefreshMillis.takeIf { it > 0 }?.let {
+                "обновлено " + Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate()
+                    .format(DateTimeFormatter.ofPattern("d MMMM yyyy", RU))
+            },
+        ).joinToString(", ").ifEmpty { "загружены" }
+    }
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(author.fullName, style = MaterialTheme.typography.bodyLarge)
+                Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Row {
+            when {
+                busy -> TextButton(onClick = onCancel) { Text("Остановить") }
+                !downloaded -> TextButton(onClick = onDownload) { Text("Загрузить") }
+                else -> {
+                    TextButton(onClick = onUpdate) { Text("Обновить") }
+                    TextButton(onClick = onDelete) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+                }
+            }
+        }
+        ui.refreshMessage?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall)
+        }
+    }
 }
 
 @Composable

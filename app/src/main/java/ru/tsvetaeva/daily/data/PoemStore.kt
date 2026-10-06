@@ -15,6 +15,10 @@ class PoemStore(context: Context, author: Author) {
 
     fun exists(): Boolean = file.exists()
 
+    fun delete() {
+        file.delete()
+    }
+
     fun load(): List<Poem> {
         if (!file.exists()) return emptyList()
         return try {

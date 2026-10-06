@@ -134,7 +134,7 @@ class DailyPoemWorker(context: Context, params: WorkerParameters) : CoroutineWor
         val author = Prefs(applicationContext).mainAuthor
         val repo = PoemRepository.get(applicationContext, author)
         try {
-            if (repo.poems().isEmpty()) runCatching { repo.refresh() }
+            // Стихи скачиваются только по выбору пользователя: если основной автор не загружен — молчим.
             repo.today()?.let { t ->
                 DailyNotifications.show(applicationContext, author, t.poem.title, t.poem.text, t.poem.dateText)
             }
@@ -147,12 +147,11 @@ class DailyPoemWorker(context: Context, params: WorkerParameters) : CoroutineWor
 
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        // Обновляем только тех авторов, чьи вкладки уже открывали (и основного).
-        val main = Prefs(applicationContext).mainAuthor
+        // Обновляем только уже скачанных авторов.
         var failed = false
         for (author in Author.entries) {
             val repo = PoemRepository.get(applicationContext, author)
-            if (author != main && !repo.hasData()) continue
+            if (!repo.hasData()) continue
             if (!repo.needsRefresh()) continue
             try {
                 repo.refresh()
