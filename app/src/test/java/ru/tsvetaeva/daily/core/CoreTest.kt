@@ -126,6 +126,12 @@ class CoreTest {
     check("pushkin not tsvetaeva", !Author.PUSHKIN.isRelevantTitle("Мой Пушкин (Цветаева)") && Author.TSVETAEVA.isRelevantTitle("Мой Пушкин (Цветаева)"))
     check("parnok relevant", Author.PARNOK.isRelevantTitle("«Тебе одной» (Парнок)"))
     check("mayakovsky relevant", Author.MAYAKOVSKY.isRelevantTitle("Облако в штанах (Маяковский)"))
+    check("blok relevant", Author.BLOK.isRelevantTitle("Ночь, улица, фонарь, аптека (Блок)") &&
+        Author.BLOK.isRelevantTitle("Лорелея (Гейне; Блок)") && Author.BLOK.isRelevantTitle("Чёрная кровь (Блок)/3"))
+    check("blok foreign", !Author.BLOK.isRelevantTitle("Дневник (Блокада Ленинграда)") &&
+        !Author.BLOK.isRelevantTitle("Стихи к Блоку (Цветаева)") && !Author.BLOK.isRelevantTitle("ЭСБЕ/Блок, машина"))
+    check("blok display", WikiParser.displayTitle("Ночь, улица, фонарь, аптека (Блок)/1914 (ДО)") == "Ночь, улица, фонарь, аптека",
+        WikiParser.displayTitle("Ночь, улица, фонарь, аптека (Блок)/1914 (ДО)"))
     check("display edition", WikiParser.displayTitle("Анчар (Пушкин)/ПСС 1959—1962 (ВТ)") == "Анчар", WikiParser.displayTitle("Анчар (Пушкин)/ПСС 1959—1962 (ВТ)"))
     check("display old orthography", WikiParser.displayTitle("Пророк (Пушкин)/ДО") == "Пророк", WikiParser.displayTitle("Пророк (Пушкин)/ДО"))
     check("display mayakovsky", WikiParser.displayTitle("Облако в штанах (Маяковский)/1") == "Облако в штанах — 1")
