@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        author: [BLOK]
+        author: [TSVETAEVA, PARNOK, PUSHKIN, MAYAKOVSKY, BLOK]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4

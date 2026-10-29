@@ -15,6 +15,11 @@ object HtmlToWiki {
         Regex("""<span[^>]*class="[^"]*mw-editsection[^"]*"[^>]*>[\s\S]*?</span>\s*</span>""", RegexOption.IGNORE_CASE),
     )
     private val poemDiv = Regex("""<div[^>]*class="[^"]*\bpoem\b[^"]*"[^>]*>([\s\S]*?)</div>""", RegexOption.IGNORE_CASE)
+    /**
+     * Два блока стихов подряд, между которыми нет текста (только пробелы и обёртки страниц), —
+     * стих, перешедший на следующую страницу скана.
+     */
+    private val poemJoint = Regex("""\n</poem>\n(?:\s|<[^>]*>)*\n<poem>\n""")
     private val heading = Regex("""<h([2-4])[^>]*>([\s\S]*?)</h\1>""", RegexOption.IGNORE_CASE)
 
     fun convert(html: String): String {
@@ -22,6 +27,7 @@ object HtmlToWiki {
         var s = html.replace(Regex("""\r?\n"""), " ")
         for (r in removeBlocks) s = r.replace(s, "")
         s = poemDiv.replace(s) { m -> "\n<poem>\n" + flatten(m.groupValues[1]) + "\n</poem>\n" }
+        s = poemJoint.replace(s, "\n")
         s = heading.replace(s) { m ->
             val eq = "=".repeat(m.groupValues[1].toInt())
             "\n$eq " + flatten(m.groupValues[2]).replace('\n', ' ').trim() + " $eq\n"
