@@ -35,7 +35,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -71,7 +70,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -83,7 +81,10 @@ import ru.tsvetaeva.daily.core.Poem
 import ru.tsvetaeva.daily.core.WikiParser
 import ru.tsvetaeva.daily.data.Prefs
 import ru.tsvetaeva.daily.notify.DailyNotifications
-import ru.tsvetaeva.daily.ui.TsvetaevaTheme
+import ru.tsvetaeva.daily.ui.AppTheme
+import ru.tsvetaeva.daily.ui.LocalPoetStyle
+import ru.tsvetaeva.daily.ui.PoetTheme
+import ru.tsvetaeva.daily.ui.style
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -101,8 +102,10 @@ class MainActivity : ComponentActivity() {
         DailyNotifications.scheduleWeeklyRefresh(this)
 
         setContent {
-            TsvetaevaTheme {
-                val state by vm.state.collectAsState()
+            val state by vm.state.collectAsState()
+            // Цвета рамки следуют за вкладкой, к которой листают, — ещё до конца свайпа.
+            var themeAuthor by remember { mutableStateOf(state.selected) }
+            AppTheme(themeAuthor) {
                 val context = LocalContext.current
                 val prefs = remember { Prefs(context) }
 
@@ -129,6 +132,7 @@ class MainActivity : ComponentActivity() {
                     MainScreen(
                         state = state,
                         onSelect = vm::select,
+                        onTarget = { themeAuthor = it },
                         onAnother = { vm.another(it) },
                         onDownload = vm::download,
                         onCancel = vm::cancelDownload,
@@ -189,6 +193,7 @@ private val AUTHORS = Author.entries
 private fun MainScreen(
     state: UiState,
     onSelect: (Author) -> Unit,
+    onTarget: (Author) -> Unit,
     onAnother: (Author) -> Unit,
     onDownload: (Author) -> Unit,
     onCancel: (Author) -> Unit,
@@ -201,6 +206,9 @@ private fun MainScreen(
     // Вкладка выбирается и касанием, и свайпом.
     LaunchedEffect(pager) {
         snapshotFlow { pager.settledPage }.collect { onSelect(AUTHORS[it]) }
+    }
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.targetPage }.collect { onTarget(AUTHORS[it]) }
     }
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -231,8 +239,15 @@ private fun MainScreen(
                     selectedContentColor = MaterialTheme.colorScheme.primary,
                     unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     text = {
+                        // Имя на вкладке — шрифтом самого поэта.
+                        val st = a.style
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(a.tag)
+                            Text(
+                                if (st.titleUppercase) a.tag.uppercase() else a.tag,
+                                fontFamily = st.title, fontWeight = st.titleWeight,
+                                fontStyle = if (st.titleItalic) FontStyle.Italic else FontStyle.Normal,
+                                fontSize = 17.sp, letterSpacing = st.titleLetterSpacing, maxLines = 1,
+                            )
                             if (a == state.main) {
                                 Spacer(Modifier.width(4.dp))
                                 Icon(Icons.Filled.Star, contentDescription = "основной", modifier = Modifier.size(14.dp))
@@ -246,6 +261,9 @@ private fun MainScreen(
         HorizontalPager(state = pager, modifier = Modifier.weight(1f), key = { AUTHORS[it].key }) { page ->
             val author = AUTHORS[page]
             val ui = state.of(author)
+            // У каждой страницы своя «бумага» — при свайпе видно, как одна сменяет другую.
+            PoetTheme(author) {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             when {
                 ui.today != null -> PoemScreen(
                     author = author,
@@ -258,6 +276,8 @@ private fun MainScreen(
                 ui.error != null -> ErrorScreen(ui.error, onRetry = { onDownload(author) })
                 ui.notLoaded -> DownloadScreen(author, onDownload = { onDownload(author) })
                 else -> Box(Modifier.fillMaxSize()) // читаем базу с телефона — доли секунды
+            }
+            }
             }
         }
     }
@@ -272,6 +292,8 @@ private fun PoemScreen(
     onOpenWiki: () -> Unit,
 ) {
     val today = ui.today ?: return
+    val st = LocalPoetStyle.current
+    val metaStyle = if (st.italicMeta) FontStyle.Italic else FontStyle.Normal
     Column(Modifier.fillMaxSize()) {
         if (ui.refreshing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 24.dp))
 
@@ -288,15 +310,18 @@ private fun PoemScreen(
                 ) {
                     DateBadge(t.poem, t.distance)
                     Text(
-                        t.poem.title,
-                        fontFamily = FontFamily.Serif,
-                        fontSize = 26.sp,
-                        lineHeight = 32.sp,
+                        if (st.titleUppercase) t.poem.title.uppercase() else t.poem.title,
+                        fontFamily = st.title,
+                        fontWeight = st.titleWeight,
+                        fontStyle = if (st.titleItalic) FontStyle.Italic else FontStyle.Normal,
+                        fontSize = st.titleSize,
+                        lineHeight = st.titleSize * 1.25f,
+                        letterSpacing = st.titleLetterSpacing,
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     sourceLabel(t.poem)?.let {
                         Text(
-                            it, fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 15.sp,
+                            it, fontFamily = st.text, fontWeight = st.textWeight, fontStyle = metaStyle, fontSize = 16.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
                         )
                     }
@@ -304,22 +329,25 @@ private fun PoemScreen(
                     SelectionContainer {
                         Text(
                             t.poem.text,
-                            fontFamily = FontFamily.Serif,
-                            fontSize = 19.sp,
-                            lineHeight = 29.sp,
+                            fontFamily = st.text,
+                            fontWeight = st.textWeight,
+                            fontSize = st.textSize,
+                            lineHeight = st.lineHeight,
                             color = MaterialTheme.colorScheme.onBackground,
                         )
                     }
                     t.poem.dateText?.let {
                         Text(
-                            it, fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 15.sp,
+                            it, fontFamily = st.text, fontWeight = st.textWeight, fontStyle = metaStyle, fontSize = 16.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 20.dp),
                         )
                     }
                     Text(
-                        author.fullName,
-                        style = MaterialTheme.typography.labelLarge,
+                        if (st.titleUppercase) author.fullName.uppercase() else author.fullName,
+                        fontFamily = st.title, fontWeight = st.titleWeight,
+                        fontStyle = if (st.titleItalic) FontStyle.Italic else FontStyle.Normal,
+                        fontSize = 17.sp, letterSpacing = st.titleLetterSpacing,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(top = 28.dp, bottom = 24.dp),
                     )
@@ -363,7 +391,7 @@ private fun DateBadge(p: Poem, distance: Int?) {
         color = MaterialTheme.colorScheme.onPrimaryContainer,
         modifier = Modifier
             .padding(top = 8.dp, bottom = 16.dp)
-            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.primaryContainer, LocalPoetStyle.current.badgeShape)
             .padding(horizontal = 12.dp, vertical = 6.dp),
     )
 }
@@ -398,7 +426,7 @@ private fun DownloadScreen(author: Author, onDownload: () -> Unit) {
     ) {
         Text(
             "Стихи ${author.genitive} ещё не загружены",
-            fontFamily = FontFamily.Serif, fontSize = 22.sp, lineHeight = 28.sp, textAlign = TextAlign.Center,
+            fontFamily = LocalPoetStyle.current.title, fontSize = 24.sp, lineHeight = 30.sp, textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(12.dp))
         Text(
@@ -424,7 +452,7 @@ private fun LoadingScreen(author: Author, progress: String?, onCancel: () -> Uni
         Text(
             "Собираю все стихи ${author.genitive} с Викитеки. Это нужно сделать один раз и займёт " +
                 "несколько минут, дальше всё работает без интернета.",
-            textAlign = TextAlign.Center, fontFamily = FontFamily.Serif, fontSize = 17.sp, lineHeight = 24.sp,
+            textAlign = TextAlign.Center, fontFamily = LocalPoetStyle.current.text, fontSize = 18.sp, lineHeight = 25.sp,
         )
         progress?.let {
             Spacer(Modifier.height(16.dp))
@@ -443,7 +471,7 @@ private fun ErrorScreen(message: String, onRetry: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Не получилось загрузить стихи", fontFamily = FontFamily.Serif, fontSize = 22.sp, textAlign = TextAlign.Center)
+        Text("Не получилось загрузить стихи", fontFamily = LocalPoetStyle.current.title, fontSize = 24.sp, textAlign = TextAlign.Center)
         Spacer(Modifier.height(12.dp))
         Text(message, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(24.dp))
@@ -530,6 +558,13 @@ private fun SettingsDialog(
                         onCancel = { onCancel(a) }, onDelete = { confirmDelete = a },
                     )
                 }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Text("Оформление вкладки «${state.selected.tag}»", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    state.selected.style.note,
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
                 Spacer(Modifier.height(12.dp))
                 Text(
                     "Тексты: ru.wikisource.org (Викитека), общественное достояние. Стихи автора скачиваются " +

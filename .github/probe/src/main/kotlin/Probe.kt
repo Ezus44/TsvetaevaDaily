@@ -72,7 +72,7 @@ fun main(args: Array<String>) {
             for ((title, wiki) in contents(batch)) {
                 seen += title
                 var parsed = WikiParser.parse(title, wiki, hints[title], author)
-                if (parsed.poems.isEmpty() && !parsed.isProse && Regex("<pages\\s", RegexOption.IGNORE_CASE).containsMatchIn(wiki)) {
+                if (parsed.poems.isEmpty() && !parsed.isProse && Regex("<pages\\s|\\{\\{\\s*Страница\\s*\\|", RegexOption.IGNORE_CASE).containsMatchIn(wiki)) {
                     htmlCalls++
                     parseHtml(title)?.let { h ->
                         val f = WikiParser.parse(title, HtmlToWiki.convert(h), hints[title], author)

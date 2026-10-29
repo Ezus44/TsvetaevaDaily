@@ -188,7 +188,8 @@ class PoemRepository private constructor(context: Context, val author: Author) {
         private const val RETRY_PARTIAL_MS = 3L * 60 * 60 * 1000
         private const val MAX_PAGES = 4000
         private const val MIN_POEMS = 10
-        private val PAGES_TAG = Regex("""<pages\s""", RegexOption.IGNORE_CASE)
+        /** Текст включён из страниц скана: `<pages …/>` или `{{Страница|Книга.djvu/34|…}}` (так у Блока). */
+        private val PAGES_TAG = Regex("""<pages\s|\{\{\s*Страница\s*\|""", RegexOption.IGNORE_CASE)
 
         /** Общий на всех авторов: обходы Викитеки идут по очереди. */
         private val crawlMutex = Mutex()

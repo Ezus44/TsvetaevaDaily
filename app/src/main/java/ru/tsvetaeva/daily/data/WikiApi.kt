@@ -145,7 +145,7 @@ class WikiApi(private val base: String = "https://ru.wikisource.org/w/api.php") 
 
         // Политика Викимедиа: User-Agent с названием клиента и ссылкой для связи.
         const val USER_AGENT =
-            "TsvetaevaDaily/1.1 (https://github.com/Ezus44/TsvetaevaDaily; Android app, poem of the day)"
+            "StikhiDnya/1.3 (https://github.com/Ezus44/TsvetaevaDaily; Android app, poem of the day)"
     }
 }
 
