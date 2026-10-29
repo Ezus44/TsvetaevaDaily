@@ -97,6 +97,9 @@ fun main(args: Array<String>) {
             "oldOrth=${result.count { Dedupe.isOldOrthography(it.text) }} htmlCalls=$htmlCalls time=${sec}s queueLeft=${queue.size}")
         println("pages with most poems: " + poemsByPage.entries.sortedByDescending { it.value }.take(8).joinToString { "${it.key}=${it.value}" })
         println("relevant pages with 0 poems (sample): " + poemsByPage.filter { it.value == 0 }.keys.take(25))
+        val famous = Regex("Ночь, улица|Пустая улица|Незнакомка|Девушка пела|О доблестях|Россия|Двенадцать|Скифы")
+        println("famous: " + result.filter { famous.containsMatchIn(it.pageTitle) }
+            .joinToString(" | ") { "${it.title} [${it.pageTitle}] ${it.text.lines().first()}" })
         val longest = result.maxByOrNull { it.text.length }
         println("longest: ${longest?.title} (${longest?.pageTitle}) ${longest?.text?.length} chars")
         val sample = result.shuffled(kotlin.random.Random(1)).take(6)
