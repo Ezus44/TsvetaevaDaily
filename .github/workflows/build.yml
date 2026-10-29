@@ -24,9 +24,9 @@ jobs:
         run: ./gradlew assembleRelease --stacktrace
 
       - name: Переименовать APK
-        run: cp app/build/outputs/apk/release/app-release.apk tsvetaeva-daily.apk
+        run: cp app/build/outputs/apk/release/app-release.apk stikhi-dnya.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tsvetaeva-daily-apk
-          path: tsvetaeva-daily.apk
+          name: stikhi-dnya.apk
+          path: stikhi-dnya.apk
