@@ -6,13 +6,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import ru.tsvetaeva.daily.core.Author
-import ru.tsvetaeva.daily.core.DateInfo
+import ru.tsvetaeva.daily.core.Crawler
 import ru.tsvetaeva.daily.core.Dates
-import ru.tsvetaeva.daily.core.Dedupe
-import ru.tsvetaeva.daily.core.HtmlToWiki
 import ru.tsvetaeva.daily.core.Poem
 import ru.tsvetaeva.daily.core.PoemPicker
-import ru.tsvetaeva.daily.core.WikiParser
 import java.time.LocalDate
 import kotlin.random.Random
 
@@ -23,6 +20,8 @@ import kotlin.random.Random
 class PoemRepository private constructor(context: Context, val author: Author) {
 
     private val store = PoemStore(context, author)
+    /** Стихи, встроенные в APK (assets/poems): есть сразу, без загрузки. */
+    private val bundle = PoemBundle(context, author)
     val prefs = Prefs(context)
     private val state = AuthorPrefs(context, author)
     private val api = WikiApi()
@@ -31,24 +30,32 @@ class PoemRepository private constructor(context: Context, val author: Author) {
 
     data class Today(val poem: Poem, val distance: Int?, val total: Int)
 
+    /** Скачанная с Викитеки база важнее встроенной: она свежее. */
     suspend fun poems(): List<Poem> = cache ?: withContext(Dispatchers.IO) {
-        store.load().also { cache = it }
+        (if (store.exists()) store.load() else bundle.load()).also { cache = it }
     }
 
-    /** Стихи автора уже скачаны. */
-    fun hasData(): Boolean = cache?.isNotEmpty() ?: store.exists()
+    /** Стихи автора есть на телефоне: встроены в приложение или скачаны. */
+    fun hasData(): Boolean = cache?.isNotEmpty() ?: (store.exists() || bundle.exists)
 
-    /** Удалить скачанные стихи (загрузить снова можно в любой момент). */
+    /** Стихи встроены в приложение. */
+    val isBundled: Boolean get() = bundle.exists
+
+    /** Поверх встроенных лежит скачанная с Викитеки база. */
+    fun hasDownloaded(): Boolean = store.exists()
+
+    /** Удалить скачанные стихи: у встроенного автора останутся встроенные, остальных можно загрузить снова. */
     fun delete() {
         store.delete()
-        cache = emptyList()
+        cache = null
         state.clear()
     }
 
-    val lastRefreshMillis: Long get() = state.lastRefreshMillis
+    val lastRefreshMillis: Long get() = if (store.exists()) state.lastRefreshMillis else bundle.generatedAt
 
+    /** Встроенные стихи сами не обновляются — только вместе с приложением или по кнопке. */
     fun needsRefresh(): Boolean =
-        System.currentTimeMillis() - state.lastRefreshMillis > REFRESH_INTERVAL_MS
+        store.exists() && System.currentTimeMillis() - state.lastRefreshMillis > REFRESH_INTERVAL_MS
 
     /**
      * Обходит Викитеку: оглавления → страницы стихов и циклов → подстраницы.
@@ -67,68 +74,13 @@ class PoemRepository private constructor(context: Context, val author: Author) {
             if (queued) onProgress(0, 0)
             withContext(Dispatchers.IO) {
                 api.onWait = onWait
-                val queue = ArrayDeque<String>()
-                val seen = HashSet<String>()
-                val hints = HashMap<String, DateInfo>()
-                val found = LinkedHashMap<String, Poem>()
-
-                fun enqueue(t: String) { if (seen.add(t)) queue.addLast(t) }
-                author.seedPages.forEach(::enqueue)
-                for (cat in author.seedCategories) {
-                    runCatching { api.categoryMembers(cat) }.getOrDefault(emptyList())
-                        .filter(author::isRelevantTitle).forEach(::enqueue)
-                }
-
-                var pagesDone = 0
-                var interrupted: Exception? = null
-                try {
-                while (queue.isNotEmpty() && pagesDone < MAX_PAGES) {
-                    val batch = ArrayList<String>()
-                    while (queue.isNotEmpty() && batch.size < 50) batch += queue.removeFirst()
-                    val pages = api.fetchContents(batch)
-                    for (page in pages) {
-                        seen += page.title // перенаправления: итоговое название тоже считаем посещённым
-                        var parsed = WikiParser.parse(page.title, page.wikitext, hints[page.title], author)
-                        if (parsed.poems.isEmpty() && !parsed.isProse && PAGES_TAG.containsMatchIn(page.wikitext)) {
-                            // Текст включён из страниц скана — берём отрисованный HTML.
-                            val html = runCatching { api.parseHtml(page.title) }.getOrNull()
-                            if (html != null) {
-                                val fromHtml = WikiParser.parse(page.title, HtmlToWiki.convert(html), hints[page.title], author)
-                                parsed = fromHtml.copy(links = parsed.links + fromHtml.links)
-                            }
-                        }
-                        hints.putAll(parsed.dateHints)
-                        for (p in parsed.poems) found[p.id] = p
-                        if (!parsed.isProse) parsed.links.filter(author::isRelevantTitle).forEach(::enqueue)
-                    }
-                    pagesDone += batch.size
-                    onProgress(pagesDone, found.size)
-                }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Викитека перестала отвечать на середине — сохраним то, что успели собрать.
-                    interrupted = e
+                val crawl = try {
+                    Crawler.crawl(api, author, MAX_PAGES, previous = { cache ?: store.load() }, onProgress = onProgress)
                 } finally {
                     api.onWait = null
                 }
-
-                // Подсказки из оглавлений могли прийти позже самих страниц — дополняем даты.
-                val withHints = found.values.map { p ->
-                    val h = hints[p.pageTitle]
-                    if (h == null || p.id != p.pageTitle) p else {
-                        val d = DateInfo(p.day, p.month, p.year).orElse(h)
-                        p.copy(day = d.day, month = d.month, year = d.year)
-                    }
-                }
-                // При неполном обходе не теряем то, что было собрано раньше.
-                val merged = if (interrupted == null) withHints else {
-                    val byId = LinkedHashMap<String, Poem>()
-                    (cache ?: store.load()).forEach { byId[it.id] = it }
-                    withHints.forEach { byId[it.id] = it }
-                    byId.values.toList()
-                }
-                val result = Dedupe.dedupe(merged).sortedWith(compareBy({ it.year ?: 9999 }, { it.month ?: 13 }, { it.day ?: 32 }))
+                val result = crawl.poems
+                val interrupted = crawl.interrupted
                 if (result.size < MIN_POEMS) {
                     throw interrupted
                         ?: IllegalStateException("С Викитеки получено слишком мало стихов (${result.size}). Попробуйте позже.")
@@ -188,8 +140,6 @@ class PoemRepository private constructor(context: Context, val author: Author) {
         private const val RETRY_PARTIAL_MS = 3L * 60 * 60 * 1000
         private const val MAX_PAGES = 4000
         private const val MIN_POEMS = 10
-        /** Текст включён из страниц скана: `<pages …/>` или `{{Страница|Книга.djvu/34|…}}` (так у Блока). */
-        private val PAGES_TAG = Regex("""<pages\s|\{\{\s*Страница\s*\|""", RegexOption.IGNORE_CASE)
 
         /** Общий на всех авторов: обходы Викитеки идут по очереди. */
         private val crawlMutex = Mutex()

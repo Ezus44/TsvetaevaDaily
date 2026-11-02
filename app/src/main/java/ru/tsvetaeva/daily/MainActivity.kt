@@ -496,9 +496,16 @@ private fun SettingsDialog(
     confirmDelete?.let { a ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
-            title = { Text("Удалить стихи?") },
-            text = { Text("Стихи ${a.genitive} будут удалены с телефона. Загрузить их снова можно в любой момент.") },
-            confirmButton = { TextButton(onClick = { onDelete(a); confirmDelete = null }) { Text("Удалить") } },
+            title = { Text(if (a in state.bundled) "Вернуть встроенные стихи?" else "Удалить стихи?") },
+            text = {
+                Text(
+                    if (a in state.bundled) "Скачанная с Викитеки база ${a.genitive} будет удалена, останутся стихи, встроенные в приложение."
+                    else "Стихи ${a.genitive} будут удалены с телефона. Загрузить их снова можно в любой момент.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onDelete(a); confirmDelete = null }) { Text(if (a in state.bundled) "Вернуть" else "Удалить") }
+            },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Отмена") } },
         )
     }
@@ -550,10 +557,11 @@ private fun SettingsDialog(
                     }
                 }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Text("Загруженные авторы", style = MaterialTheme.typography.titleSmall)
+                Text("Стихи на телефоне", style = MaterialTheme.typography.titleSmall)
                 AUTHORS.forEach { a ->
                     AuthorRow(
                         author = a, ui = state.of(a), downloaded = a in state.downloaded,
+                        bundled = a in state.bundled, updated = a in state.updated,
                         onDownload = { onDownload(a) }, onUpdate = { onUpdate(a) },
                         onCancel = { onCancel(a) }, onDelete = { confirmDelete = a },
                     )
@@ -567,8 +575,9 @@ private fun SettingsDialog(
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Тексты: ru.wikisource.org (Викитека), общественное достояние. Стихи автора скачиваются " +
-                        "только по кнопке «Загрузить»; загруженные обновляются раз в неделю по Wi‑Fi.",
+                    "Тексты: ru.wikisource.org (Викитека). Встроенные стихи обновляются вместе с приложением " +
+                        "или по кнопке «Обновить из Викитеки»; остальных авторов можно загрузить по кнопке «Загрузить», " +
+                        "скачанные обновляются раз в неделю по Wi‑Fi.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -582,6 +591,8 @@ private fun AuthorRow(
     author: Author,
     ui: AuthorUi,
     downloaded: Boolean,
+    bundled: Boolean,
+    updated: Boolean,
     onDownload: () -> Unit,
     onUpdate: () -> Unit,
     onCancel: () -> Unit,
@@ -593,6 +604,7 @@ private fun AuthorRow(
         ui.refreshing -> "обновляется…"
         !downloaded -> "не загружены"
         else -> listOfNotNull(
+            if (bundled && !updated) "встроены в приложение" else null,
             ui.today?.total?.let { "$it стихотворений" },
             ui.lastRefreshMillis.takeIf { it > 0 }?.let {
                 "обновлено " + Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate()
@@ -611,6 +623,11 @@ private fun AuthorRow(
             when {
                 busy -> TextButton(onClick = onCancel) { Text("Остановить") }
                 !downloaded -> TextButton(onClick = onDownload) { Text("Загрузить") }
+                bundled && !updated -> TextButton(onClick = onUpdate) { Text("Обновить из Викитеки") }
+                bundled -> {
+                    TextButton(onClick = onUpdate) { Text("Обновить") }
+                    TextButton(onClick = onDelete) { Text("Вернуть встроенные") }
+                }
                 else -> {
                     TextButton(onClick = onUpdate) { Text("Обновить") }
                     TextButton(onClick = onDelete) { Text("Удалить", color = MaterialTheme.colorScheme.error) }

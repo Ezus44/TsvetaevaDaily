@@ -2,18 +2,18 @@ package ru.tsvetaeva.daily.data
 
 import kotlinx.coroutines.delay
 import org.json.JSONObject
+import ru.tsvetaeva.daily.core.WikiPage
+import ru.tsvetaeva.daily.core.WikiSource
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
 /** Минимальный клиент MediaWiki API русской Викитеки. */
-class WikiApi(private val base: String = "https://ru.wikisource.org/w/api.php") {
-
-    data class Page(val title: String, val wikitext: String)
+class WikiApi(private val base: String = "https://ru.wikisource.org/w/api.php") : WikiSource {
 
     /** Названия страниц основного пространства в категории (со всеми продолжениями). */
-    suspend fun categoryMembers(category: String): List<String> {
+    override suspend fun categoryMembers(category: String): List<String> {
         val out = ArrayList<String>()
         var cont: Map<String, String> = emptyMap()
         do {
@@ -32,7 +32,7 @@ class WikiApi(private val base: String = "https://ru.wikisource.org/w/api.php") 
     }
 
     /** Викитекст до 50 страниц за запрос; перенаправления раскрываются, несуществующие пропускаются. */
-    suspend fun fetchContents(titles: List<String>): List<Page> {
+    override suspend fun fetchContents(titles: List<String>): List<WikiPage> {
         require(titles.size <= 50)
         val pages = LinkedHashMap<String, String>()
         var cont: Map<String, String> = emptyMap()
@@ -54,11 +54,11 @@ class WikiApi(private val base: String = "https://ru.wikisource.org/w/api.php") 
             }
             cont = continuation(json)
         } while (cont.isNotEmpty())
-        return pages.map { Page(it.key, it.value) }
+        return pages.map { WikiPage(it.key, it.value) }
     }
 
     /** Готовый HTML страницы — для текстов, собранных из сканов через `<pages />`. */
-    suspend fun parseHtml(title: String): String? {
+    override suspend fun parseHtml(title: String): String? {
         val json = get(
             mapOf(
                 "action" to "parse", "page" to title, "prop" to "text", "redirects" to "1",
@@ -145,7 +145,7 @@ class WikiApi(private val base: String = "https://ru.wikisource.org/w/api.php") 
 
         // Политика Викимедиа: User-Agent с названием клиента и ссылкой для связи.
         const val USER_AGENT =
-            "StikhiDnya/1.3 (https://github.com/Ezus44/TsvetaevaDaily; Android app, poem of the day)"
+            "StikhiDnya/1.4 (https://github.com/Ezus44/TsvetaevaDaily; Android app, poem of the day)"
     }
 }
 

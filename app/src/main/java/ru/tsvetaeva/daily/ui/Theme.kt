@@ -73,6 +73,17 @@ private val Playfair = FontFamily(
     Font(R.font.playfair_semibold, FontWeight.SemiBold),
 )
 
+private val Spectral = FontFamily(
+    Font(R.font.spectral_regular, FontWeight.Normal),
+    Font(R.font.spectral_italic, FontWeight.Normal, FontStyle.Italic),
+    Font(R.font.spectral_semibold, FontWeight.SemiBold),
+)
+private val Vollkorn = FontFamily(
+    Font(R.font.vollkorn_regular, FontWeight.Normal),
+    Font(R.font.vollkorn_italic, FontWeight.Normal, FontStyle.Italic),
+    Font(R.font.vollkorn_semibold, FontWeight.SemiBold),
+)
+
 private fun light(
     primary: Long, primaryContainer: Long, onPrimaryContainer: Long, background: Long, ink: Long,
     variant: Long, onVariant: Long, outline: Long, container: Long, secondary: Long,
@@ -162,6 +173,30 @@ val Author.style: PoetStyle get() = when (this) {
         title = Playfair, titleWeight = FontWeight.Normal, titleSize = 27.sp, titleItalic = true,
         note = "Символизм: синий плащ, туман белой ночи, «Ночь, улица, фонарь, аптека» — синева днём, " +
             "свет фонаря ночью. Playfair — контрастная антиква с тонкими линиями, заглавия курсивом.",
+    )
+    // Акмеизм: ясность и сдержанность. «Белая стая» и рисунки Модильяни 1911 года — графитовая
+    // линия на белом; акцент — зелень портрета Альтмана (1914). Spectral — ясная, сдержанная антиква.
+    Author.AKHMATOVA -> PoetStyle(
+        light = light(0xFF2F5D57, 0xFFDCE8E5, 0xFF123430, 0xFFF5F5F2, 0xFF1C1D1F,
+            0xFFE7E8E5, 0xFF5B5E60, 0xFFD3D5D2, 0xFFECEDEA, 0xFF5B5E60),
+        dark = dark(0xFF8CC2B8, 0xFF0F3A34, 0xFF1F4A44, 0xFFD2EDE8, 0xFF141516, 0xFFECEDEA,
+            0xFF242628, 0xFFACB0B2, 0xFF34373A, 0xFF1C1E20, 0xFFACB0B2),
+        text = Spectral, textWeight = FontWeight.Normal, textSize = 18.sp, lineHeight = 29.sp,
+        title = Spectral, titleWeight = FontWeight.SemiBold, titleSize = 26.sp,
+        note = "Акмеизм — ясность и сдержанность: графитовая линия на белом, как в «Белой стае» и на рисунках " +
+            "Модильяни, и зелень портрета Альтмана. Spectral — ясная, сдержанная антиква.",
+    )
+    // «Сестра моя — жизнь»: сирень, ливень, сад после дождя — сиреневый на влажной зелени.
+    // Vollkorn — плотная, «земная» антиква с живым рисунком — под его вещественную, густую образность.
+    Author.PASTERNAK -> PoetStyle(
+        light = light(0xFF6E4D99, 0xFFE6DCF2, 0xFF2E1A4A, 0xFFF2F5EF, 0xFF1E241F,
+            0xFFE3E8DF, 0xFF58615A, 0xFFD2D9CE, 0xFFEAEFE6, 0xFF4F7A4A),
+        dark = dark(0xFFC3A8E6, 0xFF36205A, 0xFF45306A, 0xFFEFE4FB, 0xFF121814, 0xFFE8EEE6,
+            0xFF212A23, 0xFFAAB5A7, 0xFF313B33, 0xFF1A211C, 0xFF9CC596),
+        text = Vollkorn, textWeight = FontWeight.Normal, textSize = 19.sp, lineHeight = 29.sp,
+        title = Vollkorn, titleWeight = FontWeight.SemiBold, titleSize = 26.sp,
+        note = "«Сестра моя — жизнь»: сирень и ливень, сад после дождя — сиреневый на влажной зелени. " +
+            "Vollkorn — плотная, «земная» антиква под его вещественную, густую образность.",
     )
 }
 

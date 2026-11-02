@@ -43,6 +43,10 @@ data class UiState(
     val notifyMinute: Int = 0,
     /** Авторы, чьи стихи уже лежат на телефоне. */
     val downloaded: Set<Author> = emptySet(),
+    /** Авторы, чьи стихи встроены в приложение. */
+    val bundled: Set<Author> = emptySet(),
+    /** Встроенные авторы, поверх которых скачана свежая база с Викитеки. */
+    val updated: Set<Author> = emptySet(),
 ) {
     fun of(author: Author): AuthorUi = authors[author] ?: AuthorUi()
     val current: AuthorUi get() = of(selected)
@@ -72,6 +76,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notifyHour = prefs.notifyHour,
         notifyMinute = prefs.notifyMinute,
         downloaded = Author.entries.filter { repo(it).hasData() }.toSet(),
+        bundled = Author.entries.filter { repo(it).isBundled }.toSet(),
+        updated = Author.entries.filter { repo(it).isBundled && repo(it).hasDownloaded() }.toSet(),
     )
 
     private fun updateAuthor(a: Author, f: (AuthorUi) -> AuthorUi) =
@@ -117,6 +123,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (prefs.mainAuthor == a) DailyNotifications.schedule(getApplication(), replace = true)
         updateAuthor(a) { AuthorUi(notLoaded = true) }
         _state.update { settingsState(it) }
+        // У встроенного автора остаются стихи из приложения.
+        if (repo(a).hasData()) load(a)
     }
 
     /** Вызывается при возвращении в приложение: если наступил новый день — новый стих. */
