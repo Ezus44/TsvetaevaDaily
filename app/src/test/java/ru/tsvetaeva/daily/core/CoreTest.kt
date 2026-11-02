@@ -126,6 +126,8 @@ class CoreTest {
     check("pushkin not tsvetaeva", !Author.PUSHKIN.isRelevantTitle("Мой Пушкин (Цветаева)") && Author.TSVETAEVA.isRelevantTitle("Мой Пушкин (Цветаева)"))
     check("parnok relevant", Author.PARNOK.isRelevantTitle("«Тебе одной» (Парнок)"))
     check("mayakovsky relevant", Author.MAYAKOVSKY.isRelevantTitle("Облако в штанах (Маяковский)"))
+    check("lermontov/esenin relevant", Author.LERMONTOV.isRelevantTitle("Парус (Лермонтов)") &&
+        Author.ESENIN.isRelevantTitle("Берёза (Есенин)") && !Author.ESENIN.isRelevantTitle("Парус (Лермонтов)"))
     check("blok relevant", Author.BLOK.isRelevantTitle("Ночь, улица, фонарь, аптека (Блок)") &&
         Author.BLOK.isRelevantTitle("Лорелея (Гейне; Блок)") && Author.BLOK.isRelevantTitle("Чёрная кровь (Блок)/3"))
     check("blok foreign", !Author.BLOK.isRelevantTitle("Дневник (Блокада Ленинграда)") &&

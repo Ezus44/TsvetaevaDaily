@@ -12,12 +12,8 @@ permissions:
   contents: write
 
 env:
-  # Встраиваются в APK: права на тексты давно истекли.
-  BUNDLE: tsvetaeva,parnok,pushkin,mayakovsky,blok
-  # Только проверяются (стихи загружаются на телефоне по кнопке): права на их наследие ещё действуют
-  # (Ахматова — не раньше 2037 года, Пастернак — до 2035-го); на Викитеке есть только их стихи,
-  # изданные до ноября 1917 года (PD-RusEmpire — толкование сообщества Викитеки).
-  CHECK: akhmatova,pasternak
+  # Встраиваются в APK: права на тексты давно истекли (все авторы умерли больше 70 лет назад).
+  BUNDLE: tsvetaeva,parnok,pushkin,mayakovsky,blok,lermontov,esenin
 
 jobs:
   poems:
@@ -35,7 +31,7 @@ jobs:
           gradle-version: "8.11.1"
 
       - name: Собрать стихи с Викитеки
-        run: gradle -p tools/poems run --args="--out ../../app/src/main/assets/poems --bundle $BUNDLE --check $CHECK" --console=plain -q
+        run: gradle -p tools/poems run --args="--out ../../app/src/main/assets/poems --bundle $BUNDLE" --console=plain -q
 
       - name: Сохранить в ветку
         run: |

@@ -174,29 +174,31 @@ val Author.style: PoetStyle get() = when (this) {
         note = "Символизм: синий плащ, туман белой ночи, «Ночь, улица, фонарь, аптека» — синева днём, " +
             "свет фонаря ночью. Playfair — контрастная антиква с тонкими линиями, заглавия курсивом.",
     )
-    // Акмеизм: ясность и сдержанность. «Белая стая» и рисунки Модильяни 1911 года — графитовая
-    // линия на белом; акцент — зелень портрета Альтмана (1914). Spectral — ясная, сдержанная антиква.
-    Author.AKHMATOVA -> PoetStyle(
-        light = light(0xFF2F5D57, 0xFFDCE8E5, 0xFF123430, 0xFFF5F5F2, 0xFF1C1D1F,
-            0xFFE7E8E5, 0xFF5B5E60, 0xFFD3D5D2, 0xFFECEDEA, 0xFF5B5E60),
-        dark = dark(0xFF8CC2B8, 0xFF0F3A34, 0xFF1F4A44, 0xFFD2EDE8, 0xFF141516, 0xFFECEDEA,
-            0xFF242628, 0xFFACB0B2, 0xFF34373A, 0xFF1C1E20, 0xFFACB0B2),
+    // Романтизм: «Белеет парус одинокий / В тумане моря голубом», Кавказ, «Тучки небесные».
+    // Морская бирюза и туман; ночью — светлая бирюза на тёмном море. Spectral — стройная, сухая
+    // антиква с острыми засечками; заглавия курсивом — романтический порыв при ясности строки.
+    Author.LERMONTOV -> PoetStyle(
+        light = light(0xFF1F5F6B, 0xFFD6E8EB, 0xFF0D3640, 0xFFEEF2F2, 0xFF1A2224,
+            0xFFE1E8E9, 0xFF56636A, 0xFFCCD7D9, 0xFFE7EDEE, 0xFF56636A),
+        dark = dark(0xFF8FC9D3, 0xFF0B3A44, 0xFF1C4A54, 0xFFD3EEF3, 0xFF0F1A1D, 0xFFE4EDEF,
+            0xFF1D2A2E, 0xFFA7B8BD, 0xFF2D3C40, 0xFF162226, 0xFFA7B8BD),
         text = Spectral, textWeight = FontWeight.Normal, textSize = 18.sp, lineHeight = 29.sp,
-        title = Spectral, titleWeight = FontWeight.SemiBold, titleSize = 26.sp,
-        note = "Акмеизм — ясность и сдержанность: графитовая линия на белом, как в «Белой стае» и на рисунках " +
-            "Модильяни, и зелень портрета Альтмана. Spectral — ясная, сдержанная антиква.",
+        title = Spectral, titleWeight = FontWeight.Normal, titleSize = 27.sp, titleItalic = true,
+        note = "Романтизм: «Белеет парус одинокий в тумане моря голубом», Кавказ — морская бирюза и туман. " +
+            "Spectral — стройная, сухая антиква; заглавия курсивом — романтический порыв при ясной строке.",
     )
-    // «Сестра моя — жизнь»: сирень, ливень, сад после дождя — сиреневый на влажной зелени.
-    // Vollkorn — плотная, «земная» антиква с живым рисунком — под его вещественную, густую образность.
-    Author.PASTERNAK -> PoetStyle(
-        light = light(0xFF6E4D99, 0xFFE6DCF2, 0xFF2E1A4A, 0xFFF2F5EF, 0xFF1E241F,
-            0xFFE3E8DF, 0xFF58615A, 0xFFD2D9CE, 0xFFEAEFE6, 0xFF4F7A4A),
-        dark = dark(0xFFC3A8E6, 0xFF36205A, 0xFF45306A, 0xFFEFE4FB, 0xFF121814, 0xFFE8EEE6,
-            0xFF212A23, 0xFFAAB5A7, 0xFF313B33, 0xFF1A211C, 0xFF9CC596),
+    // «Отговорила роща золотая», «Зелёная причёска, девическая грудь, о тонкая берёзка»:
+    // берёзовая зелень на белом, ночью — светлая листва на тёмном поле. Vollkorn — тёплая,
+    // «земная» антиква с живым рисунком — под деревенскую, земляную образность.
+    Author.ESENIN -> PoetStyle(
+        light = light(0xFF3F6B2E, 0xFFDDEBD3, 0xFF1C3A10, 0xFFF4F5EF, 0xFF1E211B,
+            0xFFE4E7DC, 0xFF5B6352, 0xFFD3D8C8, 0xFFECEEE5, 0xFF8A6A1E),
+        dark = dark(0xFFB5D99C, 0xFF20380F, 0xFF33502A, 0xFFDCF0CE, 0xFF121710, 0xFFE8EDE2,
+            0xFF20271C, 0xFFAEB8A5, 0xFF313A2C, 0xFF1A2017, 0xFFD9B26A),
         text = Vollkorn, textWeight = FontWeight.Normal, textSize = 19.sp, lineHeight = 29.sp,
         title = Vollkorn, titleWeight = FontWeight.SemiBold, titleSize = 26.sp,
-        note = "«Сестра моя — жизнь»: сирень и ливень, сад после дождя — сиреневый на влажной зелени. " +
-            "Vollkorn — плотная, «земная» антиква под его вещественную, густую образность.",
+        note = "«Зелёная причёска, девическая грудь, о тонкая берёзка»: берёзовая зелень на белом. " +
+            "Vollkorn — тёплая, «земная» антиква под его деревенскую, земляную образность.",
     )
 }
 

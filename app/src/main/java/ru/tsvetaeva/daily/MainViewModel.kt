@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ru.tsvetaeva.daily.core.Author
 import ru.tsvetaeva.daily.data.PoemRepository
+import ru.tsvetaeva.daily.data.PoemStore
 import ru.tsvetaeva.daily.data.Prefs
 import ru.tsvetaeva.daily.notify.DailyNotifications
 import java.time.LocalDate
@@ -64,6 +65,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val jobs = HashMap<Author, Job>()
 
     init {
+        PoemStore.removeOrphans(app)
         select(prefs.mainAuthor)
     }
 

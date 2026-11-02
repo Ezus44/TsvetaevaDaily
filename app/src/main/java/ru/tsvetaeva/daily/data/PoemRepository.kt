@@ -139,7 +139,6 @@ class PoemRepository private constructor(context: Context, val author: Author) {
         const val REFRESH_INTERVAL_MS = 7L * 24 * 60 * 60 * 1000
         private const val RETRY_PARTIAL_MS = 3L * 60 * 60 * 1000
         private const val MAX_PAGES = 4000
-        // У Пастернака на Викитеке всего 10 стихов (только изданные до 1917 года).
         private const val MIN_POEMS = 5
 
         /** Общий на всех авторов: обходы Викитеки идут по очереди. */

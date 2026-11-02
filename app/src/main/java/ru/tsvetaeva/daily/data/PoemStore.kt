@@ -13,6 +13,16 @@ class PoemStore(context: Context, author: Author) {
 
     fun exists(): Boolean = file.exists()
 
+    companion object {
+        /** Удалить скачанные базы авторов, которых больше нет в приложении. */
+        fun removeOrphans(context: Context) {
+            val known = Author.entries.map { "poems_${it.key}.json" }.toSet()
+            context.filesDir.listFiles { f -> f.name.matches(Regex("""poems_\w+\.json(\.tmp)?""")) }
+                ?.filter { it.name.removeSuffix(".tmp") !in known }
+                ?.forEach { it.delete() }
+        }
+    }
+
     fun delete() {
         file.delete()
     }
