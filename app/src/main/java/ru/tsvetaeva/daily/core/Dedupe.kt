@@ -18,10 +18,12 @@ object Dedupe {
             // Лучший текст выбираем среди исходных вариантов; при равенстве — полный,
             // а не оборванный на странице скана. Дату он получает от любого варианта, где она есть.
             val best = group.maxWith(
-                compareBy<Poem> { score(it) }.thenBy { contentLength(it.text) }
+                // Длина — грубо: «…» против «...» и знаки ударения не должны решать выбор.
+                compareBy<Poem> { score(it) }.thenBy { contentLength(it.text) / 60 }
                     // При равенстве — без номеров строф и из собрания сочинений, а не из журнала.
                     .thenBy { -it.text.lines().count { l -> numbering.matches(l) } }
-                    .thenBy { if (collected.containsMatchIn(it.pageTitle)) 1 else 0 },
+                    .thenBy { if (collected.containsMatchIn(it.pageTitle)) 1 else 0 }
+                    .thenBy { contentLength(it.text) },
             )
             group.sortedByDescending { (if (it.hasDayMonth) 2 else 0) + (if (it.year != null) 1 else 0) }
                 .fold(best) { acc, other -> withDate(acc, other) }

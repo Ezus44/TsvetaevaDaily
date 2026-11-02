@@ -243,8 +243,12 @@ class MarkupTest {
         assertEquals(1841, a.year)
         val b = WikiParser.parse("Выхожу один я на дорогу (Лермонтов)/ОЗ 1843 (ВТ)", oz, author = Author.LERMONTOV).poems.single()
         assertTrue(b.text, !b.text.contains("ЛЕРМОНТОВ"))
-        val merged = Dedupe.dedupe(listOf(b, a))
-        assertEquals(merged.map { it.id }.toString(), 1, merged.size)
-        assertEquals(a.id, merged.single().id)
+        // Журнальный текст чуть длиннее («Что̀ же» с ударением), но выбирается собрание сочинений.
+        val b2 = b.copy(text = b.text.replace("говорит.", "говорит…  ").replace("Сквозь", "Сквозь̀"))
+        for (order in listOf(listOf(b2, a), listOf(a, b2))) {
+            val merged = Dedupe.dedupe(order)
+            assertEquals(merged.map { it.id }.toString(), 1, merged.size)
+            assertEquals(a.id, merged.single().id)
+        }
     }
 }
