@@ -1,0 +1,10 @@
+name: Диагностика Викитеки (временно)
+on:
+  push:
+    paths: [".github/probe/**", ".github/workflows/probe.yml"]
+jobs:
+  raw:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 .github/probe/raw.py
