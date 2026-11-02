@@ -6,6 +6,7 @@ import ru.tsvetaeva.daily.core.Author
 import ru.tsvetaeva.daily.core.Crawler
 import ru.tsvetaeva.daily.data.PoemJson
 import ru.tsvetaeva.daily.data.WikiApi
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.zip.GZIPOutputStream
 import kotlin.system.exitProcess
@@ -50,16 +51,25 @@ fun main(args: Array<String>) = runBlocking {
         }
         if (author !in bundle) continue
 
-        if (result.interrupted != null || poems.size < 10) {
+        if (result.interrupted != null || poems.size < 5) {
             // Не затираем прежние встроенные стихи неполной выборкой.
             failed = true
             old?.optJSONObject(author.key)?.let { index.put(author.key, it) }
             continue
         }
-        File(out, "${author.key}.json.gz").outputStream().use { file ->
-            GZIPOutputStream(file).bufferedWriter(Charsets.UTF_8).use { it.write(PoemJson.write(poems)) }
+        val bytes = ByteArrayOutputStream().also { buf ->
+            GZIPOutputStream(buf).bufferedWriter(Charsets.UTF_8).use { it.write(PoemJson.write(poems)) }
+        }.toByteArray()
+        val file = File(out, "${author.key}.json.gz")
+        val unchanged = file.exists() && file.readBytes().contentEquals(bytes)
+        // Стихи не изменились — оставляем прежнюю дату, чтобы не было пустых коммитов.
+        val previous = old?.optJSONObject(author.key)
+        if (unchanged && previous != null) {
+            index.put(author.key, previous)
+        } else {
+            file.writeBytes(bytes)
+            index.put(author.key, JSONObject().put("count", poems.size).put("generatedAt", System.currentTimeMillis()))
         }
-        index.put(author.key, JSONObject().put("count", poems.size).put("generatedAt", System.currentTimeMillis()))
     }
     // Файлы авторов, которых больше не встраиваем, удаляем.
     out.listFiles { f -> f.name.endsWith(".json.gz") }?.forEach { f ->
