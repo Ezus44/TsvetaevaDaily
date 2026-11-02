@@ -82,6 +82,12 @@ object WikiParser {
 
             val lines = clean(m.groupValues[1]).lines().toMutableList()
             trimBlank(lines)
+            // Подпись автора в конце журнальной публикации: «ЛЕРМОНТОВ.», «М. Ю. ЛЕРМОНТОВ.»
+            val signature = Regex("""^[\s'"]*(?:[А-ЯЁ]\.\s*){0,3}${author.tag.uppercase()}\.?[\s'"]*$""")
+            if (lines.isNotEmpty() && signature.matches(lines.last())) {
+                lines.removeAt(lines.lastIndex)
+                trimBlank(lines)
+            }
 
             // Подпись с датой в конце блока.
             val meta = ArrayList<String>()
@@ -147,8 +153,9 @@ object WikiParser {
     }
 
     /** Шаблоны-обёртки стихотворения: `{{poemx|Заглавие|текст|дата}}` и его варианты (`f1`, `f2`, `v`…). */
-    private fun isPoemTemplate(name: String) = name == "poemx" || name == "v" || name == "poem" || name.matches(fNameRe)
-    private val fNameRe = Regex("""f\d{0,2}""")
+    private fun isPoemTemplate(name: String) = name == "v" || name == "poem" || name.matches(poemNameRe)
+    /** `poemx`, `poemx1` (издания Лермонтова), `f`, `f1`, `f2`… */
+    private val poemNameRe = Regex("""poemx\d?|f\d{0,2}""")
     private val twoOrthRe = Regex("""\{\{\s*2[ОoO]\s*\|([^{}|]+)(?:\|([^{}]*))?\}\}""")
     private val tableRe = Regex("""(?m)^\{\|[^\n]*\n([\s\S]*?)^\|\}""")
     private val brRe = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)

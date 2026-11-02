@@ -208,5 +208,43 @@ class MarkupTest {
         )
         assertEquals(1928, p.year)
     }
-}
 
+    @Test
+    fun lermontovEditionsPoemx1NumberingAndSignature() {
+        val psS = """
+{{Отексте
+|НАЗВАНИЕ=«Выхожу один я на дорогу…»
+|ДАТАСОЗДАНИЯ=1841
+}}
+{{poemx1|421|
+
+Выхожу один я на дорогу;
+Сквозь туман кремнистый путь блестит.
+Ночь тиха. Пустыня внемлет богу,
+И звезда с звездою говорит.
+
+''1841''
+|}}
+"""
+        val oz = """
+{{poemx1|<big>* * * </big>|
+
+<center>I.</center>
+Выхожу один я на дорогу:
+Сквозь туман кремнистый путь блестит;
+Ночь тиха; пустыня внемлет Богу,
+И звезда с звездою говорит.
+
+{{right|'''ЛЕРМОНТОВ.'''}}
+|}}
+"""
+        val a = WikiParser.parse("Выхожу один я на дорогу (Лермонтов)/ПСС 1989 (СО)", psS, author = Author.LERMONTOV).poems.single()
+        assertEquals("Выхожу один я на дорогу", a.title)
+        assertEquals(1841, a.year)
+        val b = WikiParser.parse("Выхожу один я на дорогу (Лермонтов)/ОЗ 1843 (ВТ)", oz, author = Author.LERMONTOV).poems.single()
+        assertTrue(b.text, !b.text.contains("ЛЕРМОНТОВ"))
+        val merged = Dedupe.dedupe(listOf(b, a))
+        assertEquals(merged.map { it.id }.toString(), 1, merged.size)
+        assertEquals(a.id, merged.single().id)
+    }
+}

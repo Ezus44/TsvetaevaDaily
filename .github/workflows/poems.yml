@@ -2,11 +2,12 @@ name: Встроенные стихи
 
 # Собирает стихи с Викитеки в app/src/main/assets/poems, коммитит их в ветку
 # и собирает APK, в котором они уже есть. Запуск: Actions → «Встроенные стихи» → Run workflow
-# (или сам — при изменении сборщика tools/poems).
+# (или сам — при изменении сборщика tools/poems или разбора Викитеки в core/).
 on:
   workflow_dispatch:
   push:
-    paths: ["tools/poems/**", ".github/workflows/poems.yml"]
+    # …и разбора Викитеки: от него зависит, что попадёт во встроенные стихи.
+    paths: ["tools/poems/**", ".github/workflows/poems.yml", "app/src/main/java/ru/tsvetaeva/daily/core/**"]
 
 permissions:
   contents: write

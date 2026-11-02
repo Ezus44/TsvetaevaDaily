@@ -17,7 +17,12 @@ object Dedupe {
         poems.groupBy(keyOf).values.map { group ->
             // Лучший текст выбираем среди исходных вариантов; при равенстве — полный,
             // а не оборванный на странице скана. Дату он получает от любого варианта, где она есть.
-            val best = group.maxWith(compareBy<Poem> { score(it) }.thenBy { it.text.length })
+            val best = group.maxWith(
+                compareBy<Poem> { score(it) }.thenBy { contentLength(it.text) }
+                    // При равенстве — без номеров строф и из собрания сочинений, а не из журнала.
+                    .thenBy { -it.text.lines().count { l -> numbering.matches(l) } }
+                    .thenBy { if (collected.containsMatchIn(it.pageTitle)) 1 else 0 },
+            )
             group.sortedByDescending { (if (it.hasDayMonth) 2 else 0) + (if (it.year != null) 1 else 0) }
                 .fold(best) { acc, other -> withDate(acc, other) }
         }
@@ -27,13 +32,22 @@ object Dedupe {
         val parts = p.pageTitle.split('/')
         if (parts.none { WikiParser.isEdition(it) }) return null
         val base = parts.filterIndexed { i, it -> i == 0 || !WikiParser.isEdition(it) }.joinToString("/")
-        val first = p.text.lines().firstOrNull { it.isNotBlank() } ?: return null
+        val first = p.text.lines().firstOrNull { it.isNotBlank() && !numbering.matches(it) } ?: return null
         return base + "|" + key(first)
     }
 
-    /** Ключ сравнения: первые буквы текста, старая орфография приведена к новой. */
+    /** Подстраница издания из собрания сочинений: «/ПСС 1989 (СО)», «/СС 1979 (СО)», «/Соч. в 6 т. 1954 (СО)». */
+    private val collected = Regex("""/(?:ПСС|СС|Соч\.|Собрание)""")
+
+    /** Номер строфы или части отдельной строкой: «I.», «2», «XIV». */
+    private val numbering = Regex("""^\s*(?:[IVXLC]+|\d{1,3})\.?\s*$""")
+
+    /** Длина текста без нумерации строф — чтобы «полнее» не значило «с номерами строф». */
+    private fun contentLength(text: String) = text.lines().filterNot { numbering.matches(it) }.sumOf { it.trim().length }
+
+    /** Ключ сравнения: первые буквы текста (без нумерации строф), старая орфография приведена к новой. */
     fun key(text: String): String {
-        val s = text.lowercase()
+        val s = text.lines().filterNot { numbering.matches(it) }.joinToString("\n").lowercase()
             .replace('ё', 'е').replace('ѣ', 'е').replace('і', 'и').replace('ѳ', 'ф').replace('ѵ', 'и')
             .replace(Regex("ъ(?![а-яё])"), "")
             .replace(Regex("([ая])го(?![а-яё])")) { if (it.groupValues[1] == "а") "ого" else "его" }
